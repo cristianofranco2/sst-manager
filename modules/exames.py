@@ -4,31 +4,33 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
-
-# Garantia com fallback direto da URL do seu projeto Supabase
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
-
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
-    # Criar o cliente diretamente na execução da função
+    # 1. Carrega as variáveis do .env a cada execução
+    load_dotenv(override=True)
+    
+    # 2. Força o uso da URL e Chave corretas
+    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
+    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
+    
+    # 3. Cria a conexão direto na função para não usar cache antigo
     try:
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        supabase: Client = create_client(url, key)
     except Exception as e:
-        st.error(f"Erro ao conectar ao Supabase: {e}")
+        st.error(f"Erro ao conectar com o Supabase: {e}")
         return
 
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
+    # Busca colaboradores com tratamento de erro
     colab_dict = {}
     try:
         res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
         colabs_data = res_colabs.data or []
         colab_dict = {f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})": c['id'] for c in colabs_data}
     except Exception as e:
-        st.error(f"Erro ao carregar colaboradores: {e}")
+        st.error(f"Erro ao buscar colaboradores: {e}")
 
     with tab1:
         st.subheader("ASOs Registados")
