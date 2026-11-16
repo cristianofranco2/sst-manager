@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
+from modules.colaboradores import render_colaboradores
 
 load_dotenv()
 
@@ -30,23 +31,22 @@ def main():
     st.sidebar.caption("Sistema Integrado SST • Streamlit + Supabase")
 
     if menu == "👥 Colaboradores":
-        st.title("👥 Gestão de Colaboradores")
-        st.info("Módulo em integração...")
+        render_colaboradores()
     elif menu == "🥽 Catálogo de EPIs":
         st.title("🥽 Catálogo e Controle de EPIs")
-        st.info("Módulo em integração...")
+        st.info("Módulo em desenvolvimento...")
     elif menu == "🩺 Exames Médicos (ASO)":
         st.title("🩺 Exames Médicos Ocupacionais")
-        st.info("Módulo em integração...")
+        st.info("Módulo em desenvolvimento...")
     elif menu == "📚 Treinamentos & Cursos":
         st.title("📚 Controle de Treinamentos e NRs")
-        st.info("Módulo em integração...")
+        st.info("Módulo em desenvolvimento...")
     elif menu == "📦 Gestão de Almoxarifado":
         st.title("📦 Almoxarifado e Movimentação")
-        st.info("Módulo em integração...")
+        st.info("Módulo em desenvolvimento...")
     elif menu == "⚠️ Alertas & Pendências":
         st.title("⚠️ Painel Geral de Alertas")
-        st.info("Módulo em integração...")
+        st.info("Módulo em desenvolvimento...")
 
 if __name__ == "__main__":
     main()
