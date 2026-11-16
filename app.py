@@ -2,12 +2,13 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 
+# Força a recarga total das variáveis de ambiente a cada execução
+load_dotenv(override=True)
+
 # Importação dos módulos funcionais
 from modules.colaboradores import render_colaboradores
 from modules.epis import render_epis
 from modules.exames import render_exames
-
-load_dotenv()
 
 st.set_page_config(
     page_title="Gestão de SST",
@@ -35,7 +36,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption("Sistema Integrado SST • Streamlit + Supabase")
 
-    # Roteamento de páginas exato
+    # Roteamento de páginas
     if menu == "👥 Colaboradores":
         render_colaboradores()
     elif menu == "🥽 Catálogo de EPIs":
