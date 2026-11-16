@@ -4,38 +4,34 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-# Carrega as variáveis diretamente do arquivo .env no diretório raiz
-load_dotenv(override=True)
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 def get_supabase_client() -> Client:
-    # Caso a URL não seja encontrada ou ainda contenha a URL incorreta
-    if not SUPABASE_URL or "sst-manager" in SUPABASE_URL:
-        st.error(f"URL do Supabase inválida ou não configurada no .env. URL atual: {SUPABASE_URL}")
+    # Fuerza recarga de las variables del .env
+    load_dotenv(override=True)
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    
+    if not url or "sst-manager" in url:
+        st.error(f"⚠️ URL do Supabase incorreta no arquivo .env: {url}")
         st.stop()
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+        
+    return create_client(url, key)
 
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
-    try:
-        supabase = get_supabase_client()
-    except Exception as e:
-        st.error(f"Falha ao conectar com o Supabase: {e}")
-        return
-
+    # Instancia o cliente dentro da função para garantir a URL atualizada
+    supabase = get_supabase_client()
+    
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
-    # Busca de colaboradores encapsulada para evitar derrubar a aplicação
+    # Busca de colaboradores encapsulada
     colab_dict = {}
     try:
         res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
         colabs_data = res_colabs.data or []
         colab_dict = {f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})": c['id'] for c in colabs_data}
     except Exception as e:
-        st.warning(f"Não foi possível carregar os colaboradores: {e}")
+        st.error(f"Erro ao carregar colaboradores: {e}")
 
     with tab1:
         st.subheader("ASOs Registados")
