@@ -2,6 +2,7 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 
+# Importação dos módulos funcionais
 from modules.colaboradores import render_colaboradores
 from modules.epis import render_epis
 from modules.exames import render_exames
@@ -18,6 +19,7 @@ def main():
     st.sidebar.title("🛡️ SST Manager")
     st.sidebar.markdown("---")
     
+    # Opções do menu lateral
     menu = st.sidebar.selectbox(
         "Selecione o Módulo",
         [
@@ -33,6 +35,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption("Sistema Integrado SST • Streamlit + Supabase")
 
+    # Roteamento de páginas exato
     if menu == "👥 Colaboradores":
         render_colaboradores()
     elif menu == "🥽 Catálogo de EPIs":
