@@ -4,26 +4,33 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Recarrega as variáveis de ambiente a cada chamada
+load_dotenv(override=True)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-@st.cache_resource
-def init_connection() -> Client:
+def get_supabase_client() -> Client:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("Credenciais do Supabase não encontradas no arquivo .env")
+        st.stop()
     return create_client(SUPABASE_URL, SUPABASE_KEY)
-
-supabase = init_connection()
 
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
+    supabase = get_supabase_client()
+    
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
-    # Busca colaboradores para os seletores
-    res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
-    colabs_data = res_colabs.data or []
-    colab_dict = {f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})": c['id'] for c in colabs_data}
+    # Busca colaboradores para os seletores com tratamento de erro
+    colab_dict = {}
+    try:
+        res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
+        colabs_data = res_colabs.data or []
+        colab_dict = {f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})": c['id'] for c in colabs_data}
+    except Exception as e:
+        st.error(f"Erro ao carregar colaboradores: {e}")
     
     with tab1:
         st.subheader("ASOs Registados")
@@ -34,7 +41,7 @@ def render_exames():
             if exames_data:
                 registos = []
                 for item in exames_data:
-                    c_info = item.get('colaboradores', {})
+                    c_info = item.get('colaboradores', {}) or {}
                     registos.append({
                         "Matrícula": c_info.get('matricula', '-'),
                         "Colaborador": c_info.get('nome_completo', '-'),
