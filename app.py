@@ -1,7 +1,10 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
+
 from modules.colaboradores import render_colaboradores
+from modules.epis import render_epis
+from modules.exames import render_exames
 
 load_dotenv()
 
@@ -33,11 +36,9 @@ def main():
     if menu == "👥 Colaboradores":
         render_colaboradores()
     elif menu == "🥽 Catálogo de EPIs":
-        st.title("🥽 Catálogo e Controle de EPIs")
-        st.info("Módulo em desenvolvimento...")
+        render_epis()
     elif menu == "🩺 Exames Médicos (ASO)":
-        st.title("🩺 Exames Médicos Ocupacionais")
-        st.info("Módulo em desenvolvimento...")
+        render_exames()
     elif menu == "📚 Treinamentos & Cursos":
         st.title("📚 Controle de Treinamentos e NRs")
         st.info("Módulo em desenvolvimento...")
