@@ -4,27 +4,24 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-def get_supabase_client() -> Client:
-    # Fuerza recarga de las variables del .env
-    load_dotenv(override=True)
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
-    
-    if not url or "sst-manager" in url:
-        st.error(f"⚠️ URL do Supabase incorreta no arquivo .env: {url}")
-        st.stop()
-        
-    return create_client(url, key)
+load_dotenv(override=True)
+
+# Garantia com fallback direto da URL do seu projeto Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
 
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
-    # Instancia o cliente dentro da função para garantir a URL atualizada
-    supabase = get_supabase_client()
-    
+    # Criar o cliente diretamente na execução da função
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        st.error(f"Erro ao conectar ao Supabase: {e}")
+        return
+
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
-    # Busca de colaboradores encapsulada
     colab_dict = {}
     try:
         res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
