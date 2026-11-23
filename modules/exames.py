@@ -4,7 +4,7 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-# Carrega as variáveis de ambiente
+# Carrega as variáveis do arquivo .env
 load_dotenv(override=True)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co").strip()
@@ -17,6 +17,7 @@ def init_connection() -> Client:
         st.stop()
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Instancia a conexão global no módulo
 supabase = init_connection()
 
 def render_exames():
@@ -24,7 +25,7 @@ def render_exames():
     
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
-    # 1. Busca mapa de colaboradores
+    # 1. Carrega o mapa de colaboradores (evita JOIN via PostgREST/DNS)
     colab_map = {}
     colab_dict = {}
     try:
@@ -34,12 +35,12 @@ def render_exames():
             colab_map[c['id']] = c
             colab_dict[f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})"] = c['id']
     except Exception as e:
-        st.error(f"Erro ao buscar colaboradores: {e}")
+        st.error(f"Não foi possível buscar a lista de colaboradores: {e}")
 
     with tab1:
         st.subheader("ASOs Registados")
         try:
-            # Consulta simples sem JOIN encadeado para evitar erro no PostgREST/DNS
+            # Consulta simples na tabela de exames
             res_exames = supabase.table("exames_medicos").select("*").execute()
             exames_data = res_exames.data or []
             
