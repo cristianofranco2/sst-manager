@@ -4,24 +4,21 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-# Carrega as variáveis do arquivo .env
-load_dotenv()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-@st.cache_resource
-def init_connection() -> Client:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("Erro: Credenciais SUPABASE_URL ou SUPABASE_KEY não configuradas no arquivo .env!")
-        st.stop()
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
-
-supabase = init_connection()
+def get_supabase_client() -> Client:
+    load_dotenv(override=True)
+    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
+    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
+    return create_client(url, key)
 
 def render_colaboradores():
     st.title("👥 Gestão de Colaboradores")
     
+    try:
+        supabase: Client = get_supabase_client()
+    except Exception as e:
+        st.error(f"Erro ao conectar com o Supabase: {e}")
+        return
+
     tab1, tab2 = st.tabs(["Listar / Gerenciar", "Novo Colaborador"])
     
     with tab1:
