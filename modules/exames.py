@@ -13,6 +13,7 @@ def get_supabase_client() -> Client:
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
+    # Instancia a conexão dinamicamente no início da função
     try:
         supabase: Client = get_supabase_client()
     except Exception as e:
@@ -21,6 +22,7 @@ def render_exames():
 
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
+    # Busca colaboradores para os seletores
     colab_dict = {}
     try:
         res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
