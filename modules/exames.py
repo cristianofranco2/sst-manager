@@ -4,43 +4,51 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-def get_supabase_client() -> Client:
-    load_dotenv(override=True)
-    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co").strip()
-    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z").strip()
-    return create_client(url, key)
+# Carrega as variáveis de ambiente
+load_dotenv(override=True)
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z").strip()
+
+@st.cache_resource
+def init_connection() -> Client:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("Erro: Credenciais SUPABASE_URL ou SUPABASE_KEY não configuradas no arquivo .env!")
+        st.stop()
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_connection()
 
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
-    # 1. Instancia a conexão dinamicamente dentro da função
-    try:
-        supabase: Client = get_supabase_client()
-    except Exception as e:
-        st.error(f"Erro ao conectar com o Supabase: {e}")
-        return
-
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
-    # 2. Busca de colaboradores tratada com bloco de erro independente
+    # 1. Busca mapa de colaboradores
+    colab_map = {}
     colab_dict = {}
     try:
         res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
         colabs_data = res_colabs.data or []
-        colab_dict = {f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})": c['id'] for c in colabs_data}
+        for c in colabs_data:
+            colab_map[c['id']] = c
+            colab_dict[f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})"] = c['id']
     except Exception as e:
-        st.error(f"Não foi possível carregar a lista de colaboradores: {e}")
+        st.error(f"Erro ao buscar colaboradores: {e}")
 
     with tab1:
         st.subheader("ASOs Registados")
         try:
-            res_exames = supabase.table("exames_medicos").select("*, colaboradores(nome_completo, matricula, cargo)").execute()
-            exames_data = res_exames.data
+            # Consulta simples sem JOIN encadeado para evitar erro no PostgREST/DNS
+            res_exames = supabase.table("exames_medicos").select("*").execute()
+            exames_data = res_exames.data or []
             
             if exames_data:
                 registos = []
                 for item in exames_data:
-                    c_info = item.get('colaboradores', {}) or {}
+                    c_id = item.get('colaborador_id')
+                    c_info = colab_map.get(c_id, {})
+                    
                     registos.append({
                         "Matrícula": c_info.get('matricula', '-'),
                         "Colaborador": c_info.get('nome_completo', '-'),
