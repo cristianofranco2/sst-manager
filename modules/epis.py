@@ -4,20 +4,21 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-@st.cache_resource
-def init_connection() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
-
-supabase = init_connection()
+def get_supabase_client() -> Client:
+    load_dotenv(override=True)
+    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
+    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
+    return create_client(url, key)
 
 def render_epis():
     st.title("🥽 Catálogo de Equipamentos de Proteção Individual (EPIs)")
     
+    try:
+        supabase: Client = get_supabase_client()
+    except Exception as e:
+        st.error(f"Erro ao conectar com o Supabase: {e}")
+        return
+
     tab1, tab2 = st.tabs(["Catálogo Cadastrado", "Cadastrar Novo EPI"])
     
     with tab1:
