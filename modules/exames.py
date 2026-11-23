@@ -4,26 +4,23 @@ from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 
+def get_supabase_client() -> Client:
+    load_dotenv(override=True)
+    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
+    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
+    return create_client(url, key)
+
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
-    # 1. Carrega as variáveis do .env a cada execução
-    load_dotenv(override=True)
-    
-    # 2. Força o uso da URL e Chave corretas
-    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
-    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
-    
-    # 3. Cria a conexão direto na função para não usar cache antigo
     try:
-        supabase: Client = create_client(url, key)
+        supabase: Client = get_supabase_client()
     except Exception as e:
         st.error(f"Erro ao conectar com o Supabase: {e}")
         return
 
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
-    # Busca colaboradores com tratamento de erro
     colab_dict = {}
     try:
         res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
