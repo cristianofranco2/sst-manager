@@ -6,30 +6,31 @@ from dotenv import load_dotenv
 
 def get_supabase_client() -> Client:
     load_dotenv(override=True)
-    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co")
-    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z")
+    # URL e chave oficiais tratadas sem espaços
+    url = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co").strip()
+    key = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z").strip()
     return create_client(url, key)
 
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
     
-    # Instancia a conexão dinamicamente no início da função
+    # Validação e inicialização dinâmica
     try:
         supabase: Client = get_supabase_client()
     except Exception as e:
-        st.error(f"Erro ao conectar com o Supabase: {e}")
+        st.error(f"Erro crítico na conexão Supabase: {e}")
         return
 
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
     
-    # Busca colaboradores para os seletores
+    # Carregamento seguro dos colaboradores
     colab_dict = {}
     try:
         res_colabs = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").execute()
         colabs_data = res_colabs.data or []
         colab_dict = {f"{c['matricula']} - {c['nome_completo']} ({c['cargo']})": c['id'] for c in colabs_data}
     except Exception as e:
-        st.error(f"Erro ao buscar colaboradores: {e}")
+        st.error(f"Erro ao buscar colaboradores no Supabase: {e}")
 
     with tab1:
         st.subheader("ASOs Registados")
@@ -56,7 +57,7 @@ def render_exames():
             else:
                 st.info("Nenhum exame médico registado até ao momento.")
         except Exception as e:
-            st.error(f"Erro ao carregar exames: {e}")
+            st.error(f"Erro ao carregar lista de exames: {e}")
 
     with tab2:
         st.subheader("Lançamento de ASO / Exame Periódico")
