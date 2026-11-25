@@ -7,18 +7,19 @@ from modules.tipos_exames import render_tipos_exames
 st.set_page_config(
     page_title="Gestor SST - Globex",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
 )
 
-def main():
+
+def main() -> None:
     st.sidebar.title("🛡️ Gestor SST")
     st.sidebar.markdown("---")
-    
+
     menu = st.sidebar.radio(
         "Selecione o Módulo",
-        ["👥 Colaboradores", "🥽 Catálogo de EPIs", "📋 Catálogo de Tipos de Exames"]
+        ["👥 Colaboradores", "🥽 Catálogo de EPIs", "📋 Catálogo de Tipos de Exames"],
     )
-    
+
     st.sidebar.markdown("---")
     st.sidebar.caption("Sistema Integrado SST • Streamlit + Supabase")
 
@@ -28,6 +29,7 @@ def main():
         render_epis()
     elif menu == "📋 Catálogo de Tipos de Exames":
         render_tipos_exames()
+
 
 if __name__ == "__main__":
     main()
