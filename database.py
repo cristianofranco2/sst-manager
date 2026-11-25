@@ -10,5 +10,4 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_
 
 @st.cache_resource(ttl=3600)
 def get_supabase() -> Client:
-    """Conexão centralizada com cache para evitar erros de DNS."""
     return create_client(SUPABASE_URL, SUPABASE_KEY)
