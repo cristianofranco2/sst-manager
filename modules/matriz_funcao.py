@@ -69,9 +69,12 @@ def _garantir_estado_matriz() -> dict:
             "funcao_id": None,
             "carregado_para_funcao": None,
             "epi_ids": [],
+            "epi_quantidades": {},
             "treinamento_ids": [],
             "exame_ids": [],
         }
+    elif "epi_quantidades" not in st.session_state["matriz_state"]:
+        st.session_state["matriz_state"]["epi_quantidades"] = {}
     return st.session_state["matriz_state"]
 
 
@@ -146,10 +149,15 @@ def render_matriz_funcao() -> None:
         registro_salvo = _buscar_requisito_funcao(funcao_selecionada)
         if registro_salvo:
             state["epi_ids"] = [str(x) for x in (registro_salvo.get("epi_ids") or [])]
+            qtd_raw = registro_salvo.get("epi_quantidades") or {}
+            state["epi_quantidades"] = {
+                str(k): max(1, int(v)) for k, v in qtd_raw.items() if v is not None
+            }
             state["treinamento_ids"] = [str(x) for x in (registro_salvo.get("treinamento_ids") or [])]
             state["exame_ids"] = [str(x) for x in (registro_salvo.get("exame_ids") or [])]
         else:
             state["epi_ids"] = []
+            state["epi_quantidades"] = {}
             state["treinamento_ids"] = []
             state["exame_ids"] = []
         state["carregado_para_funcao"] = funcao_selecionada
@@ -160,17 +168,19 @@ def render_matriz_funcao() -> None:
 
     st.markdown("---")
 
-    # BLOCO 1: EPIs
+    # BLOCO 1: EPIs + QUANTIDADE (- / +)
     b1_esq, b1_dir = st.columns([4, 1])
     with b1_esq:
-        st.subheader("🥽 2. EPIs da Função")
+        st.subheader("🥽 2. EPIs da Função e Quantidade")
     with b1_dir:
         if st.button("➕ Cadastrar EPI", key="btn_add_epi_matriz", use_container_width=True):
             _ir_para_modulo("🥽 Catálogo de EPIs")
             st.rerun()
 
     epi_ids_selecionados = set(state["epi_ids"])
+    qtds_atuais = dict(state.get("epi_quantidades") or {})
     novos_epi_ids: list[str] = []
+    novas_epi_qtds: dict[str, int] = {}
 
     if epis:
         with st.container(border=True):
@@ -184,17 +194,36 @@ def render_matriz_funcao() -> None:
                 detalhes = [p for p in [f"SKU {sku}" if sku else "", f"CA {ca}" if ca else ""] if p]
                 label_epi = f"{nome_epi} — {' | '.join(detalhes)}" if detalhes else nome_epi
 
-                marcado = st.checkbox(
-                    label_epi,
-                    value=eid in epi_ids_selecionados,
-                    key=f"chk_epi_{funcao_selecionada}_{eid}",
-                )
+                col_chk, col_qtd = st.columns([4, 1])
+                with col_chk:
+                    marcado = st.checkbox(
+                        label_epi,
+                        value=eid in epi_ids_selecionados,
+                        key=f"chk_epi_{funcao_selecionada}_{eid}",
+                    )
+                with col_qtd:
+                    if marcado:
+                        qtd_padrao = max(1, int(qtds_atuais.get(eid, 1)))
+                        qtd_val = st.number_input(
+                            "Qtd.",
+                            min_value=1,
+                            max_value=999,
+                            value=qtd_padrao,
+                            step=1,
+                            label_visibility="collapsed",
+                            key=f"qtd_epi_{funcao_selecionada}_{eid}",
+                        )
+                    else:
+                        qtd_val = max(1, int(qtds_atuais.get(eid, 1)))
+
                 if marcado:
                     novos_epi_ids.append(eid)
+                    novas_epi_qtds[eid] = int(qtd_val)
     else:
         st.info("Nenhum EPI cadastrado ainda. Use o botão **➕ Cadastrar EPI** ao lado para cadastrar.")
 
     state["epi_ids"] = novos_epi_ids
+    state["epi_quantidades"] = novas_epi_qtds
 
     st.markdown("---")
 
@@ -286,6 +315,7 @@ def render_matriz_funcao() -> None:
             payload = {
                 "funcao_id": funcao_selecionada,
                 "epi_ids": state["epi_ids"],
+                "epi_quantidades": state["epi_quantidades"],
                 "treinamento_ids": state["treinamento_ids"],
                 "exame_ids": state["exame_ids"],
             }
@@ -313,14 +343,37 @@ def render_matriz_funcao() -> None:
             for x in exames
             if x.get("id")
         }
+        qtds_salvas = requisitos_salvos.get("epi_quantidades") or {}
 
         resumo_linhas = []
         for eid in requisitos_salvos.get("epi_ids") or []:
-            resumo_linhas.append({"Categoria": "EPI", "Item": mapa_epis.get(str(eid), str(eid))})
+            eid_str = str(eid)
+            qtd_item = qtds_salvas.get(eid_str, 1)
+            resumo_linhas.append(
+                {
+                    "Categoria": "EPI",
+                    "Item": mapa_epis.get(eid_str, eid_str),
+                    "Quantidade": qtd_item,
+                }
+            )
         for tid in requisitos_salvos.get("treinamento_ids") or []:
-            resumo_linhas.append({"Categoria": "Treinamento", "Item": mapa_trein.get(str(tid), str(tid))})
+            tid_str = str(tid)
+            resumo_linhas.append(
+                {
+                    "Categoria": "Treinamento",
+                    "Item": mapa_trein.get(tid_str, tid_str),
+                    "Quantidade": "-",
+                }
+            )
         for xid in requisitos_salvos.get("exame_ids") or []:
-            resumo_linhas.append({"Categoria": "Exame", "Item": mapa_exames.get(str(xid), str(xid))})
+            xid_str = str(xid)
+            resumo_linhas.append(
+                {
+                    "Categoria": "Exame",
+                    "Item": mapa_exames.get(xid_str, xid_str),
+                    "Quantidade": "-",
+                }
+            )
 
         if resumo_linhas:
             st.markdown("##### Itens Atualmente Vinculados a Esta Função no Banco")
