@@ -1,23 +1,12 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
-import os
-from dotenv import load_dotenv
-
-load_dotenv(override=True)
-
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mhrohbalngkhhpldrzsg.supabase.co").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_7aCZMLZVkikSCaktM823rQ_w4mT3e-Z").strip()
-
-@st.cache_resource
-def init_connection() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+from database import get_supabase
 
 def render_exames():
     st.title("🩺 Gestão de Exames Médicos (ASO)")
 
     try:
-        supabase = init_connection()
+        supabase = get_supabase()
     except Exception as e:
         st.error(f"Erro ao conectar ao Supabase: {e}")
         return
