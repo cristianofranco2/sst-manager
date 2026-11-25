@@ -26,6 +26,14 @@ OPCOES_MENU = [
 def main() -> None:
     if "menu_selecionado" not in st.session_state:
         st.session_state["menu_selecionado"] = OPCOES_MENU[0]
+
+    # Aplica navegação pendente ANTES de instanciar o widget st.radio
+    if "menu_pendente" in st.session_state and st.session_state["menu_pendente"]:
+        destino = st.session_state.pop("menu_pendente")
+        if destino in OPCOES_MENU:
+            st.session_state["menu_selecionado"] = destino
+            st.session_state["radio_menu_SST"] = destino
+
     if "radio_menu_SST" not in st.session_state:
         st.session_state["radio_menu_SST"] = st.session_state["menu_selecionado"]
 
