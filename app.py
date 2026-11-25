@@ -4,6 +4,7 @@ from modules.colaboradores import render_colaboradores
 from modules.epis import render_epis
 from modules.funcoes import render_funcoes
 from modules.matriz_funcao import render_matriz_funcao, render_voltar_matriz_se_necessario
+from modules.relatorio_colaborador import render_relatorio_colaborador
 from modules.tipos_exames import render_tipos_exames
 from modules.treinamentos import render_treinamentos
 
@@ -14,6 +15,7 @@ st.set_page_config(
 )
 
 OPCOES_MENU = [
+    "📄 Relatório por Colaborador",
     "🧩 Matriz por Função",
     "💼 Funções",
     "👥 Colaboradores",
@@ -27,7 +29,6 @@ def main() -> None:
     if "menu_selecionado" not in st.session_state:
         st.session_state["menu_selecionado"] = OPCOES_MENU[0]
 
-    # Aplica navegação pendente ANTES de instanciar o widget st.radio
     if "menu_pendente" in st.session_state and st.session_state["menu_pendente"]:
         destino = st.session_state.pop("menu_pendente")
         if destino in OPCOES_MENU:
@@ -50,7 +51,9 @@ def main() -> None:
     st.sidebar.markdown("---")
     st.sidebar.caption("Sistema Integrado SST • Streamlit + Supabase")
 
-    if menu == "🧩 Matriz por Função":
+    if menu == "📄 Relatório por Colaborador":
+        render_relatorio_colaborador()
+    elif menu == "🧩 Matriz por Função":
         render_matriz_funcao()
     elif menu == "💼 Funções":
         render_voltar_matriz_se_necessario()
