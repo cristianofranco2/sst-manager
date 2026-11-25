@@ -11,7 +11,7 @@ def render_exames():
         st.error(f"Erro ao conectar ao Supabase: {e}")
         return
 
-    tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
+    tab1, tab2 = st.tabs(["Histórico de Exames", "Registrar Novo ASO"])
 
     colab_map = {}
     colab_dict = {}
@@ -24,7 +24,7 @@ def render_exames():
         st.error(f"Erro ao carregar colaboradores: {e}")
 
     with tab1:
-        st.subheader("ASOs Registados")
+        st.subheader("ASOs Registrados")
         try:
             res_e = supabase.table("exames_medicos").select("*").execute()
             exames_data = res_e.data or []
@@ -45,7 +45,7 @@ def render_exames():
                     })
                 st.dataframe(pd.DataFrame(registos), use_container_width=True)
             else:
-                st.info("Nenhum exame médico registado.")
+                st.info("Nenhum exame médico registrado até o momento.")
         except Exception as e:
             st.error(f"Erro ao listar exames: {e}")
 
@@ -53,7 +53,7 @@ def render_exames():
         st.subheader("Lançamento de ASO / Exame Periódico")
 
         if not colab_dict:
-            st.warning("Cadastre colaboradores antes de registar exames.")
+            st.warning("Cadastre colaboradores antes de registrar exames médicos.")
             return
 
         colab_sel = st.selectbox("Selecione o Colaborador *", list(colab_dict.keys()))
@@ -65,12 +65,12 @@ def render_exames():
                 data_realizacao = st.date_input("Data da Realização *")
                 resultado = st.selectbox("Resultado *", ["Apto", "Inapto", "Apto com Restrição"])
                 descricao_restricoes = st.text_area("Descrição das Restrições (se houver)")
-                data_vencimento = st.date_input("Data de Vencimento *")
+                data_vencimento = st.date_input("Data de Vencimento / Próximo Exame *")
             with col2:
                 medico_examinador = st.text_input("Médico Examinador *")
                 crm_uf = st.text_input("CRM e UF * (ex: 123456/SP)")
 
-            if st.form_submit_button("Salvar Registo"):
+            if st.form_submit_button("Salvar Registro"):
                 if not medico_examinador or not crm_uf:
                     st.warning("Preencha todos os campos obrigatórios (*).")
                 else:
@@ -85,7 +85,7 @@ def render_exames():
                             "crm_uf": crm_uf
                         }
                         supabase.table("exames_medicos").insert(novo_aso).execute()
-                        st.success("ASO registado com sucesso!")
+                        st.success("ASO registrado com sucesso!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
+                        st.error(f"Erro ao salvar ASO: {e}")
