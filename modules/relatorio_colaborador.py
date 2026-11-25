@@ -92,6 +92,14 @@ def _formatar_vencimento_e_dias(data_venc: date | None, hoje: date) -> tuple[str
     return data_str, f"🟢 {dias} dias"
 
 
+def _normalizar_lista_ids(valor) -> list[str]:
+    if not valor:
+        return []
+    if isinstance(valor, list):
+        return [str(x).strip() for x in valor if x is not None and str(x).strip()]
+    return []
+
+
 def render_relatorio_colaborador() -> None:
     st.title("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
@@ -150,30 +158,35 @@ def render_relatorio_colaborador() -> None:
     treinamentos = _buscar_treinamentos()
     exames = _buscar_tipos_exames()
 
-    # Localiza a função pelo nome (cargo) para obter a matriz em funcao_requisitos
+    # Localiza a função por ID (se houver) ou pelo nome normalizado
     funcao_id_encontrado = None
-    for f in funcoes:
-        nome_f = str(f.get("nome_funcao") or "").strip().lower()
-        if nome_f and nome_f == funcao_colab.lower():
-            funcao_id_encontrado = str(f.get("id"))
-            break
+    if colab.get("funcao_id"):
+        funcao_id_encontrado = str(colab.get("funcao_id")).strip()
+
+    if not funcao_id_encontrado:
+        alvo = " ".join(funcao_colab.lower().split())
+        for f in funcoes:
+            nome_f = " ".join(str(f.get("nome_funcao") or "").lower().split())
+            if nome_f and nome_f == alvo:
+                funcao_id_encontrado = str(f.get("id")).strip()
+                break
 
     req_funcao = {}
     if funcao_id_encontrado:
         for r in requisitos_lista:
-            if str(r.get("funcao_id")) == funcao_id_encontrado:
+            if str(r.get("funcao_id") or "").strip() == funcao_id_encontrado:
                 req_funcao = r
                 break
 
     hoje = date.today()
-    epi_ids_req = [str(x) for x in (req_funcao.get("epi_ids") or [])]
+    epi_ids_req = _normalizar_lista_ids(req_funcao.get("epi_ids"))
     epi_qtds_req = req_funcao.get("epi_quantidades") or {}
-    trein_ids_req = [str(x) for x in (req_funcao.get("treinamento_ids") or [])]
-    exame_ids_req = [str(x) for x in (req_funcao.get("exame_ids") or [])]
+    trein_ids_req = _normalizar_lista_ids(req_funcao.get("treinamento_ids"))
+    exame_ids_req = _normalizar_lista_ids(req_funcao.get("exame_ids"))
 
-    mapa_epis = {str(e["id"]): e for e in epis if e.get("id")}
-    mapa_trein = {str(t["id"]): t for t in treinamentos if t.get("id")}
-    mapa_exames = {str(x["id"]): x for x in exames if x.get("id")}
+    mapa_epis = {str(e["id"]).strip(): e for e in epis if e.get("id")}
+    mapa_trein = {str(t["id"]).strip(): t for t in treinamentos if t.get("id")}
+    mapa_exames = {str(x["id"]).strip(): x for x in exames if x.get("id")}
 
     # 1. BLOCO EPIs
     st.markdown("### 🥽 EPIs")
@@ -217,6 +230,44 @@ def render_relatorio_colaborador() -> None:
         data_venc_ex = None
         if data_admissao and validade_meses:
             try:
-                data_venc_ex = _somar_meses(data_admissao, int(validade_meses))
+                meses_int = int(validade_meses)
+                if meses_int > 0:
+                    data_venc_ex = _somar_meses(data_admissao, meses_int)
             except Exception:
-                data_venc_
+                data_venc_ex = None
+
+        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_ex, hoje)
+        linhas_exame.append({"Exame": nome_ex, "Vencimento": venc_str, "Dias Restantes": dias_str})
+
+    if linhas_exame:
+        st.dataframe(pd.DataFrame(linhas_exame), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Nenhum exame vinculado à função deste colaborador.")
+
+    # 3. BLOCO TREINAMENTOS
+    st.markdown("### 🎓 Treinamentos")
+    linhas_trein = []
+
+    venc_por_tipo: dict[str, date] = {}
+    for tr in treinamentos:
+        if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
+            tipo_tr = " ".join(str(tr.get("tipo_treinamento") or "").lower().split())
+            dt_v = _parse_data(tr.get("data_vencimento"))
+            if tipo_tr and dt_v:
+                if tipo_tr not in venc_por_tipo or dt_v > venc_por_tipo[tipo_tr]:
+                    venc_por_tipo[tipo_tr] = dt_v
+
+    for tid in trein_ids_req:
+        tr_base = mapa_trein.get(tid)
+        if not tr_base:
+            continue
+        nome_tr = str(tr_base.get("tipo_treinamento") or "Treinamento").strip()
+        chave_tr = " ".join(nome_tr.lower().split())
+        data_venc_tr = venc_por_tipo.get(chave_tr) or _parse_data(tr_base.get("data_vencimento"))
+        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_tr, hoje)
+        linhas_trein.append({"Treinamento": nome_tr, "Vencimento": venc_str, "Dias Restantes": dias_str})
+
+    if linhas_trein:
+        st.dataframe(pd.DataFrame(linhas_trein), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Nenhum treinamento vinculado à função deste colaborador.")
