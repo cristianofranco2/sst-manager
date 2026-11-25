@@ -38,12 +38,12 @@ def render_colaboradores() -> None:
                     "matricula",
                     "nome_completo",
                     "cpf",
-                    "rg",
+                    "rg_numero",
                     "data_nascimento",
                     "cargo",
-                    "setor",
+                    "centro_custo",
                     "tipo_contrato",
-                    "email",
+                    "email_pessoal",
                     "telefone",
                     "data_admissao",
                     "status",
@@ -55,12 +55,12 @@ def render_colaboradores() -> None:
                         "matricula": "Matrícula",
                         "nome_completo": "Nome Completo",
                         "cpf": "CPF",
-                        "rg": "RG",
+                        "rg_numero": "RG",
                         "data_nascimento": "Data Nasc.",
                         "cargo": "Cargo",
-                        "setor": "Setor / Depto",
+                        "centro_custo": "Centro de Custo",
                         "tipo_contrato": "Contrato",
-                        "email": "E-mail",
+                        "email_pessoal": "E-mail",
                         "telefone": "Telefone",
                         "data_admissao": "Admissão",
                         "status": "Status",
@@ -82,39 +82,38 @@ def render_colaboradores() -> None:
                 nome_completo = st.text_input("Nome Completo *")
             with c2:
                 cpf = st.text_input("CPF * (somente números)")
-                rg = st.text_input("RG")
+                rg_numero = st.text_input("RG")
             with c3:
                 data_nascimento = st.date_input("Data de Nascimento")
-                sexo = st.selectbox("Gênero", ["Masculino", "Feminino", "Outro", "Não informado"])
+                genero = st.selectbox("Gênero", ["Masculino", "Feminino", "Outro", "Não informado"])
 
             st.markdown("---")
             st.markdown("##### 🏢 Dados Profissionais e Alocação")
             c4, c5, c6 = st.columns(3)
             with c4:
                 cargo = st.text_input("Cargo / Função *")
-                setor = st.text_input("Setor / Departamento *")
+                centro_custo = st.text_input("Setor / Centro de Custo")
             with c5:
                 tipo_contrato = st.selectbox(
                     "Tipo de Contrato", ["CLT", "PJ", "Estágio", "Temporário", "Terceirizado"]
                 )
-                data_admissao = st.date_input("Data de Admissão *")
+                data_admissao = st.date_input("Data de Admissão")
             with c6:
                 status = st.selectbox("Status Inicial", ["Ativo", "Afastado", "Férias", "Desligado"])
-                gestor_direto = st.text_input("Gestor Direto / Supervisor")
+                superior_imediato = st.text_input("Gestor Direto / Superior Imediato")
 
             st.markdown("---")
-            st.markdown("##### 📞 Contato e Observações SST")
+            st.markdown("##### 📞 Contato")
             c7, c8 = st.columns(2)
             with c7:
-                email = st.text_input("E-mail Corporativo / Pessoal")
-                telefone = st.text_input("Telefone / WhatsApp")
+                email_pessoal = st.text_input("E-mail Corporativo / Pessoal")
             with c8:
-                observacoes_sst = st.text_area("Observações de SST (Restrições, PCD, etc.)")
+                telefone = st.text_input("Telefone / WhatsApp")
 
             submitted = st.form_submit_button("💾 Salvar Ficha de Colaborador")
 
             if submitted:
-                if not matricula or not nome_completo or not cpf or not cargo or not setor:
+                if not matricula or not nome_completo or not cpf or not cargo:
                     st.warning("Preencha todos os campos obrigatórios assinalados com (*).")
                 else:
                     try:
@@ -122,18 +121,17 @@ def render_colaboradores() -> None:
                             "matricula": matricula.strip(),
                             "nome_completo": nome_completo.strip(),
                             "cpf": cpf.strip(),
-                            "rg": rg.strip(),
+                            "rg_numero": rg_numero.strip(),
                             "data_nascimento": str(data_nascimento),
-                            "genero": sexo,
+                            "genero": genero,
                             "cargo": cargo.strip(),
-                            "setor": setor.strip(),
+                            "centro_custo": centro_custo.strip(),
                             "tipo_contrato": tipo_contrato,
                             "data_admissao": str(data_admissao),
                             "status": status,
-                            "gestor_direto": gestor_direto.strip(),
-                            "email": email.strip(),
+                            "superior_imediato": superior_imediato.strip(),
+                            "email_pessoal": email_pessoal.strip(),
                             "telefone": telefone.strip(),
-                            "observacoes_sst": observacoes_sst.strip(),
                         }
                         supabase.table("colaboradores").insert(novo_colaborador).execute()
                         _buscar_colaboradores.clear()
