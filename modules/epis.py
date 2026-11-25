@@ -35,10 +35,11 @@ def render_epis() -> None:
             if data:
                 df = pd.DataFrame(data)
                 colunas = [
-                    "nome_epi",
-                    "ca",
-                    "fabricante",
-                    "validade_ca",
+                    "codigo_sku",
+                    "descricao",
+                    "categoria",
+                    "numero_ca",
+                    "data_validade_ca",
                     "dias_durabilidade_media",
                     "quantidade_estoque",
                 ]
@@ -54,26 +55,33 @@ def render_epis() -> None:
         with st.form("form_novo_epi", clear_on_submit=True):
             c1, c2 = st.columns(2)
             with c1:
-                nome_epi = st.text_input("Nome / Descrição do EPI *")
-                ca = st.text_input("Número do CA (Certificado de Aprovação) *")
+                codigo_sku = st.text_input("Código SKU / Identificador *")
+                descricao = st.text_input("Nome / Descrição do EPI *")
+                categoria = st.selectbox("Categoria *", ["Proteção Head", "Proteção Visual", "Proteção Auditiva", "Proteção Respiratória", "Proteção das Mãos", "Calçados", "Proteção Contra Quedas"])
                 fabricante = st.text_input("Fabricante")
             with c2:
+                ca = st.text_input("Número do CA (Certificado de Aprovação) *")
                 validade_ca = st.date_input("Data de Validade do CA *")
                 durabilidade = st.number_input("Durabilidade Média (em dias)", min_value=1, value=180)
                 qtd_estoque = st.number_input("Quantidade em Estoque", min_value=0, value=0)
 
             if st.form_submit_button("Salvar EPI"):
-                if not nome_epi or not ca:
+                if not codigo_sku or not descricao or not ca:
                     st.warning("Preencha os campos obrigatórios (*).")
                 else:
                     try:
                         novo_epi = {
-                            "nome_epi": nome_epi.strip(),
-                            "ca": ca.strip(),
+                            "codigo_sku": codigo_sku.strip(),
+                            "descricao": descricao.strip(),
+                            "categoria": categoria,
                             "fabricante": fabricante.strip(),
+                            "numero_ca": ca.strip(),
+                            "ca": ca.strip(),
+                            "data_validade_ca": str(validade_ca),
                             "validade_ca": str(validade_ca),
                             "dias_durabilidade_media": int(durabilidade),
                             "quantidade_estoque": int(qtd_estoque),
+                            "nome_epi": descricao.strip()
                         }
                         supabase.table("epis").insert(novo_epi).execute()
                         _buscar_epis.clear()
