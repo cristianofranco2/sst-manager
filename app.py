@@ -3,6 +3,7 @@ import streamlit as st
 from modules.colaboradores import render_colaboradores
 from modules.epis import render_epis
 from modules.tipos_exames import render_tipos_exames
+from modules.treinamentos import render_treinamentos
 
 st.set_page_config(
     page_title="Gestor SST - Globex",
@@ -17,7 +18,12 @@ def main() -> None:
 
     menu = st.sidebar.radio(
         "Selecione o Módulo",
-        ["👥 Colaboradores", "🥽 Catálogo de EPIs", "📋 Catálogo de Tipos de Exames"],
+        [
+            "👥 Colaboradores",
+            "🥽 Catálogo de EPIs",
+            "📋 Catálogo de Tipos de Exames",
+            "🎓 Treinamentos",
+        ],
     )
 
     st.sidebar.markdown("---")
@@ -29,6 +35,8 @@ def main() -> None:
         render_epis()
     elif menu == "📋 Catálogo de Tipos de Exames":
         render_tipos_exames()
+    elif menu == "🎓 Treinamentos":
+        render_treinamentos()
 
 
 if __name__ == "__main__":
