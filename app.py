@@ -1,16 +1,9 @@
 import streamlit as st
-import os
-from dotenv import load_dotenv
 
-# Carrega as variáveis de ambiente
-load_dotenv(override=True)
-
-# Importação dos módulos da aplicação
 from modules.colaboradores import render_colaboradores
 from modules.epis import render_epis
-from modules.exames import render_exames
+from modules.tipos_exames import render_tipos_exames
 
-# Configuração da página do Streamlit
 st.set_page_config(
     page_title="Gestor SST - Globex",
     page_icon="🛡️",
@@ -22,19 +15,19 @@ def main():
     st.sidebar.markdown("---")
     
     menu = st.sidebar.radio(
-        "Navegação",
-        ["👷 Colaboradores", "🥾 Gestão de EPIs", "🩺 Exames Médicos (ASO)"]
+        "Selecione o Módulo",
+        ["👥 Colaboradores", "🥽 Catálogo de EPIs", "📋 Catálogo de Tipos de Exames"]
     )
     
     st.sidebar.markdown("---")
-    st.sidebar.caption("SST Management System v1.0")
+    st.sidebar.caption("Sistema Integrado SST • Streamlit + Supabase")
 
-    if menu == "👷 Colaboradores":
+    if menu == "👥 Colaboradores":
         render_colaboradores()
-    elif menu == "🥾 Gestão de EPIs":
+    elif menu == "🥽 Catálogo de EPIs":
         render_epis()
-    elif menu == "🩺 Exames Médicos (ASO)":
-        render_exames()
+    elif menu == "📋 Catálogo de Tipos de Exames":
+        render_tipos_exames()
 
 if __name__ == "__main__":
     main()
