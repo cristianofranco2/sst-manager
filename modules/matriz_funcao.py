@@ -80,21 +80,22 @@ def _garantir_estado_matriz() -> dict:
 
 def _ir_para_modulo(destino_menu: str) -> None:
     st.session_state["origem_matriz"] = True
-    st.session_state["menu_selecionado"] = destino_menu
-    st.session_state["radio_menu_SST"] = destino_menu
+    st.session_state["menu_pendente"] = destino_menu
 
 
 def render_voltar_matriz_se_necessario() -> None:
     if st.session_state.get("origem_matriz"):
         col_aviso, col_btn = st.columns([3, 1])
         with col_aviso:
-            st.info("Você abriu este cadastro a partir da **Matriz por Função**. Seu rascunho está preservado.")
+            st.info(
+                "Você abriu este cadastro a partir da **Matriz por Função**. "
+                "Seu rascunho está preservado."
+            )
         with col_btn:
             if st.button("↩️ Voltar para a Matriz", key="btn_voltar_matriz", use_container_width=True):
                 st.session_state["origem_matriz"] = False
                 _limpar_cache_matriz()
-                st.session_state["menu_selecionado"] = "🧩 Matriz por Função"
-                st.session_state["radio_menu_SST"] = "🧩 Matriz por Função"
+                st.session_state["menu_pendente"] = "🧩 Matriz por Função"
                 st.rerun()
 
 
