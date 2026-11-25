@@ -2,6 +2,7 @@ import streamlit as st
 
 from modules.colaboradores import render_colaboradores
 from modules.epis import render_epis
+from modules.funcoes import render_funcoes
 from modules.tipos_exames import render_tipos_exames
 from modules.treinamentos import render_treinamentos
 
@@ -20,6 +21,7 @@ def main() -> None:
         "Selecione o Módulo",
         [
             "👥 Colaboradores",
+            "💼 Funções",
             "🥽 Catálogo de EPIs",
             "📋 Catálogo de Tipos de Exames",
             "🎓 Treinamentos",
@@ -31,6 +33,8 @@ def main() -> None:
 
     if menu == "👥 Colaboradores":
         render_colaboradores()
+    elif menu == "💼 Funções":
+        render_funcoes()
     elif menu == "🥽 Catálogo de EPIs":
         render_epis()
     elif menu == "📋 Catálogo de Tipos de Exames":
