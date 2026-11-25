@@ -11,6 +11,22 @@ def _buscar_colaboradores() -> list[dict]:
     return res.data or []
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _buscar_funcoes_ativas() -> list[dict]:
+    supabase = get_supabase()
+    try:
+        res = (
+            supabase.table("funcoes")
+            .select("id, nome_funcao, cbo, setor_padrao, ativo")
+            .order("nome_funcao")
+            .execute()
+        )
+        dados = res.data or []
+        return [f for f in dados if f.get("ativo", True)]
+    except Exception:
+        return []
+
+
 def render_colaboradores() -> None:
     st.title("👥 Gestão de Colaboradores")
 
@@ -19,6 +35,13 @@ def render_colaboradores() -> None:
     except Exception as e:
         st.error(f"Erro ao conectar com o Supabase: {e}")
         return
+
+    funcoes = _buscar_funcoes_ativas()
+    mapa_funcoes: dict[str, dict] = {}
+    for f in funcoes:
+        nome_func = str(f.get("nome_funcao") or "").strip()
+        if nome_func:
+            mapa_funcoes[nome_func] = f
 
     tab1, tab2 = st.tabs(["Listar / Gerenciar Colaboradores", "➕ Cadastrar Novo Colaborador"])
 
@@ -29,6 +52,7 @@ def render_colaboradores() -> None:
         with col_acao:
             if st.button("🔄 Atualizar lista", key="btn_atualizar_colabs", use_container_width=True):
                 _buscar_colaboradores.clear()
+                _buscar_funcoes_ativas.clear()
 
         try:
             data = _buscar_colaboradores()
@@ -41,6 +65,7 @@ def render_colaboradores() -> None:
                     "rg_numero",
                     "data_nascimento",
                     "cargo",
+                    "cbo",
                     "centro_custo",
                     "tipo_contrato",
                     "email_pessoal",
@@ -57,7 +82,8 @@ def render_colaboradores() -> None:
                         "cpf": "CPF",
                         "rg_numero": "RG",
                         "data_nascimento": "Data Nasc.",
-                        "cargo": "Cargo",
+                        "cargo": "Função / Cargo",
+                        "cbo": "CBO",
                         "centro_custo": "Centro de Custo",
                         "tipo_contrato": "Contrato",
                         "email_pessoal": "E-mail",
@@ -74,6 +100,28 @@ def render_colaboradores() -> None:
 
     with tab2:
         st.subheader("Ficha Completa de Cadastro do Colaborador")
+
+        nomes_funcoes = sorted(mapa_funcoes.keys())
+
+        if nomes_funcoes:
+            funcao_selecionada = st.selectbox(
+                "Selecione a Função Cadastrada",
+                options=nomes_funcoes,
+                key="select_funcao_colaborador",
+            )
+            dados_funcao = mapa_funcoes.get(funcao_selecionada, {})
+            cbo_padrao = str(dados_funcao.get("cbo") or "").strip()
+            setor_padrao = str(dados_funcao.get("setor_padrao") or "").strip()
+            cargo_final = funcao_selecionada
+        else:
+            st.info(
+                "Nenhuma função ativa encontrada no módulo **Funções**. "
+                "Você pode cadastrar uma lá ou digitar o cargo manualmente abaixo."
+            )
+            cbo_padrao = ""
+            setor_padrao = ""
+            cargo_final = ""
+
         with st.form("form_cadastro_colaborador_completo", clear_on_submit=True):
             st.markdown("##### 📄 Dados Pessoais e Identificação")
             c1, c2, c3 = st.columns(3)
@@ -91,16 +139,22 @@ def render_colaboradores() -> None:
             st.markdown("##### 🏢 Dados Profissionais e Alocação")
             c4, c5, c6 = st.columns(3)
             with c4:
-                cargo = st.text_input("Cargo / Função *")
-                centro_custo = st.text_input("Setor / Centro de Custo")
+                if nomes_funcoes:
+                    st.text_input("Função Selecionada *", value=cargo_final, disabled=True)
+                    cargo_digitado = cargo_final
+                else:
+                    cargo_digitado = st.text_input("Cargo / Função *")
+                centro_custo = st.text_input("Setor / Centro de Custo", value=setor_padrao)
             with c5:
+                cbo = st.text_input("CBO", value=cbo_padrao)
                 tipo_contrato = st.selectbox(
                     "Tipo de Contrato", ["CLT", "PJ", "Estágio", "Temporário", "Terceirizado"]
                 )
-                data_admissao = st.date_input("Data de Admissão")
             with c6:
+                data_admissao = st.date_input("Data de Admissão")
                 status = st.selectbox("Status Inicial", ["Ativo", "Afastado", "Férias", "Desligado"])
-                superior_imediato = st.text_input("Gestor Direto / Superior Imediato")
+
+            superior_imediato = st.text_input("Gestor Direto / Superior Imediato")
 
             st.markdown("---")
             st.markdown("##### 📞 Contato")
@@ -113,7 +167,8 @@ def render_colaboradores() -> None:
             submitted = st.form_submit_button("💾 Salvar Ficha de Colaborador")
 
             if submitted:
-                if not matricula or not nome_completo or not cpf or not cargo:
+                cargo_salvar = (cargo_digitado or "").strip()
+                if not matricula.strip() or not nome_completo.strip() or not cpf.strip() or not cargo_salvar:
                     st.warning("Preencha todos os campos obrigatórios assinalados com (*).")
                 else:
                     try:
@@ -124,7 +179,8 @@ def render_colaboradores() -> None:
                             "rg_numero": rg_numero.strip(),
                             "data_nascimento": str(data_nascimento),
                             "genero": genero,
-                            "cargo": cargo.strip(),
+                            "cargo": cargo_salvar,
+                            "cbo": cbo.strip(),
                             "centro_custo": centro_custo.strip(),
                             "tipo_contrato": tipo_contrato,
                             "data_admissao": str(data_admissao),
