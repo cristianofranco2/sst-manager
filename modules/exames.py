@@ -22,7 +22,6 @@ def render_exames():
                 df = pd.DataFrame(data)
                 colunas = [c for c in ["nome_exame", "codigo_tuss", "validade_meses", "observacoes"] if c in df.columns]
                 
-                # Renomeia colunas para melhor visualização na tabela
                 df_exib = df[colunas].rename(columns={
                     "nome_exame": "Nome do Exame",
                     "codigo_tuss": "Código TUSS",
