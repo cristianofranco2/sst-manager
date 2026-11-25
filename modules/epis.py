@@ -41,7 +41,7 @@ def render_epis() -> None:
                     "numero_ca",
                     "data_validade_ca",
                     "dias_durabilidade_media",
-                    "quantidade_estoque",
+                    "fabricante",
                 ]
                 colunas_existentes = [c for c in colunas if c in df.columns]
                 st.dataframe(df[colunas_existentes] if colunas_existentes else df, use_container_width=True)
@@ -57,13 +57,24 @@ def render_epis() -> None:
             with c1:
                 codigo_sku = st.text_input("Código SKU / Identificador *")
                 descricao = st.text_input("Nome / Descrição do EPI *")
-                categoria = st.selectbox("Categoria *", ["Proteção Head", "Proteção Visual", "Proteção Auditiva", "Proteção Respiratória", "Proteção das Mãos", "Calçados", "Proteção Contra Quedas"])
-                fabricante = st.text_input("Fabricante")
+                categoria = st.selectbox(
+                    "Categoria *",
+                    [
+                        "Proteção Head",
+                        "Proteção Visual",
+                        "Proteção Auditiva",
+                        "Proteção Respiratória",
+                        "Proteção das Mãos",
+                        "Calçados",
+                        "Proteção Contra Quedas",
+                    ],
+                )
             with c2:
                 ca = st.text_input("Número do CA (Certificado de Aprovação) *")
                 validade_ca = st.date_input("Data de Validade do CA *")
                 durabilidade = st.number_input("Durabilidade Média (em dias)", min_value=1, value=180)
-                qtd_estoque = st.number_input("Quantidade em Estoque", min_value=0, value=0)
+
+            fabricante = st.text_input("Fabricante")
 
             if st.form_submit_button("Salvar EPI"):
                 if not codigo_sku or not descricao or not ca:
@@ -80,8 +91,7 @@ def render_epis() -> None:
                             "data_validade_ca": str(validade_ca),
                             "validade_ca": str(validade_ca),
                             "dias_durabilidade_media": int(durabilidade),
-                            "quantidade_estoque": int(qtd_estoque),
-                            "nome_epi": descricao.strip()
+                            "nome_epi": descricao.strip(),
                         }
                         supabase.table("epis").insert(novo_epi).execute()
                         _buscar_epis.clear()
