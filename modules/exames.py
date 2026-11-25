@@ -24,7 +24,6 @@ def render_exames():
 
     tab1, tab2 = st.tabs(["Histórico de Exames", "Registar Novo ASO"])
 
-    # Carrega colaboradores para mapear nomes e alimentar o selectbox
     colab_map = {}
     colab_dict = {}
     try:
