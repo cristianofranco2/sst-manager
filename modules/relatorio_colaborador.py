@@ -811,6 +811,32 @@ def _conteudo_dialog_renovar(
         st.rerun()
 
 
+if hasattr(st, "dialog"):
+    @st.dialog("🔄 Trocar EPI")
+    def _modal_troca_epi_global(
+        supabase, inventario: list[dict], colab_sel_id: str, nome_colab: str, e: dict, qtd_req, dur_dias: int, fechar_cb
+    ) -> None:
+        _conteudo_dialog_troca_epi(
+            supabase, inventario, colab_sel_id, nome_colab, e, qtd_req, dur_dias, fechar_cb
+        )
+
+    @st.dialog("🔁 Renovar Item")
+    def _modal_renovar_global(
+        supabase,
+        tipo_label: str,
+        tabela_destino: str,
+        colab_sel_id: str,
+        nome_colab: str,
+        item_dict: dict,
+        nome_item: str,
+        per_padrao: int,
+        fechar_cb,
+    ) -> None:
+        _conteudo_dialog_renovar(
+            supabase, tipo_label, tabela_destino, colab_sel_id, nome_colab, item_dict, nome_item, per_padrao, fechar_cb
+        )
+
+
 def render_relatorio_colaborador() -> None:
     render_cabecalho_modulo("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
@@ -1024,14 +1050,9 @@ def render_relatorio_colaborador() -> None:
 
                     if st.session_state.get(chave_modal_epi, False):
                         if hasattr(st, "dialog"):
-                            @st.dialog(f"🔄 Trocar EPI — {nome_epi_str}")
-                            def _dlg_epi(
-                                _e=e, _q=qtd_req, _d=dur_dias, _cb=_fechar_epi
-                            ):
-                                _conteudo_dialog_troca_epi(
-                                    supabase, inventario, colab_sel_id, nome_colab, _e, _q, _d, _cb
-                                )
-                            _dlg_epi()
+                            _modal_troca_epi_global(
+                                supabase, inventario, colab_sel_id, nome_colab, e, qtd_req, dur_dias, _fechar_epi
+                            )
                         else:
                             with st.container(border=True):
                                 _conteudo_dialog_troca_epi(
@@ -1113,14 +1134,9 @@ def render_relatorio_colaborador() -> None:
 
                     if st.session_state.get(chave_modal_ex, False):
                         if hasattr(st, "dialog"):
-                            @st.dialog(f"🔁 Renovar Exame — {nome_ex}")
-                            def _dlg_ex(
-                                _item=ex_item, _n=nome_ex, _p=per_padrao, _cb=_fechar_ex
-                            ):
-                                _conteudo_dialog_renovar(
-                                    supabase, "Exame", "exames_colaborador", colab_sel_id, nome_colab, _item, _n, _p, _cb
-                                )
-                            _dlg_ex()
+                            _modal_renovar_global(
+                                supabase, "Exame", "exames_colaborador", colab_sel_id, nome_colab, ex_item, nome_ex, per_padrao, _fechar_ex
+                            )
                         else:
                             with st.container(border=True):
                                 _conteudo_dialog_renovar(
@@ -1150,4 +1166,119 @@ def render_relatorio_colaborador() -> None:
         trein_req = _resolver_itens_catalogo(
             refs_trein,
             treinamentos,
-            ("nome_treinamento", "nome", "titulo", "curso", "tipo_treinamento", "
+            ("nome_treinamento", "nome", "titulo", "curso", "tipo_treinamento", "descricao"),
+            manter_nao_encontrados=True,
+        )
+
+        trein_base_lista = list(trein_vinculados_colab) + list(trein_vinculados_funcao) + list(trein_req)
+        if not trein_base_lista and treinamentos:
+            trein_base_lista = [
+                tr for tr in treinamentos if not str(tr.get("colaborador_id") or "").strip()
+            ]
+
+        linhas_trein_exibir: list[dict] = []
+        vistos_trein: set[str] = set()
+        for tr in trein_base_lista:
+            nome_tr = _nome_treinamento(tr)
+            chave_tr = _normalizar(nome_tr) if nome_tr != "—" else str(tr.get("id") or id(tr))
+            if chave_tr in vistos_trein:
+                continue
+            vistos_trein.add(chave_tr)
+            copia = dict(tr)
+            copia["Treinamento"] = nome_tr
+            linhas_trein_exibir.append(copia)
+
+        if linhas_trein_exibir:
+            for idx, tr_item in enumerate(linhas_trein_exibir):
+                tr_id = str(tr_item.get("id") or idx).strip()
+                nome_tr = str(tr_item.get("Treinamento") or _nome_treinamento(tr_item)).upper()
+                per_tr_str = _formatar_periodo_meses(tr_item.get("validade_meses") or tr_item.get("periodicidade_meses"))
+                real_tr_str = _formatar_data_br(tr_item.get("data_realizacao") or tr_item.get("data_conclusao"))
+                venc_raw_tr = tr_item.get("data_vencimento") or tr_item.get("validade")
+                venc_tr_str = _formatar_data_br(venc_raw_tr)
+                bol_tr, rot_tr = _indicador_vencimento(venc_raw_tr)
+                status_tr = str(tr_item.get("status") or rot_tr).upper()
+
+                chave_modal_tr = f"abrir_ren_trein_{colab_sel_id}_{tr_id}_{idx}"
+
+                def _fechar_tr(k=chave_modal_tr):
+                    st.session_state[k] = False
+
+                try:
+                    per_trein_padrao = max(1, int(float(tr_item.get("validade_meses") or 12)))
+                except Exception:
+                    per_trein_padrao = 12
+
+                with st.container(border=True):
+                    cols = st.columns([2.1, 1.1, 1.2, 1.9, 1.6, 1.3])
+                    cols[0].markdown(f"**Treinamento:**  \n{nome_tr}")
+                    cols[1].markdown(f"**Período:**  \n{per_tr_str}")
+                    cols[2].markdown(f"**Realização:**  \n{real_tr_str}")
+                    cols[3].markdown(f"**Vencimento:**  \n{bol_tr} {venc_tr_str}")
+                    cols[4].markdown(f"**Status:**  \n{bol_tr} {status_tr}")
+
+                    if cols[5].button("🔁 Renovar", key=f"btn_{chave_modal_tr}", use_container_width=True):
+                        st.session_state[chave_modal_tr] = True
+
+                    if st.session_state.get(chave_modal_tr, False):
+                        if hasattr(st, "dialog"):
+                            _modal_renovar_global(
+                                supabase, "Treinamento", "treinamentos", colab_sel_id, nome_colab, tr_item, nome_tr, per_trein_padrao, _fechar_tr
+                            )
+                        else:
+                            with st.container(border=True):
+                                _conteudo_dialog_renovar(
+                                    supabase, "Treinamento", "treinamentos", colab_sel_id, nome_colab, tr_item, nome_tr, per_trein_padrao, _fechar_tr
+                                )
+        else:
+            st.info("NENHUM TREINAMENTO CADASTRADO OU VINCULADO.")
+
+    with tab2:
+        st.subheader("🕒 Histórico do Colaborador")
+        if historico_itens:
+            st.dataframe(pd.DataFrame(historico_itens), use_container_width=True, hide_index=True)
+
+            pdf_bytes = _gerar_pdf_auditoria_bytes(
+                resumo_colab={
+                    "colaborador": nome_colab,
+                    "matricula": matricula,
+                    "funcao": nome_funcao,
+                    "setor": setor,
+                    "status": status,
+                    "admissao": admissao_str,
+                },
+                linhas_historico=historico_itens,
+            )
+
+            nome_arquivo = f"auditoria_sst_{matricula if matricula != '—' else _normalizar(nome_colab).replace(' ', '_')}.pdf"
+            st.download_button(
+                label="📥 Baixar Relatório em PDF",
+                data=pdf_bytes,
+                file_name=nome_arquivo,
+                mime="application/pdf",
+                key="btn_baixar_pdf_colab",
+            )
+        else:
+            st.info("NENHUM HISTÓRICO DE TROCA DE EPI, EXAME OU TREINAMENTO REGISTRADO PARA ESTE COLABORADOR.")
+
+    with tab3:
+        st.subheader("📊 Relatório por Período")
+        p1, p2 = st.columns(2)
+        with p1:
+            dt_ini = st.date_input("Data Inicial", value=date.today().replace(day=1), format="DD/MM/YYYY")
+        with p2:
+            dt_fim = st.date_input("Data Final", value=date.today(), format="DD/MM/YYYY")
+
+        filtrados_periodo = []
+        for h in historico_itens:
+            dt_ref = _parse_data(h.get("Vencimento")) or _parse_data(h.get("Data"))
+            if dt_ref and dt_ini <= dt_ref <= dt_fim:
+                filtrados_periodo.append(h)
+
+        if filtrados_periodo:
+            st.dataframe(pd.DataFrame(filtrados_periodo), use_container_width=True, hide_index=True)
+        else:
+            st.info("NENHUM REGISTRO ENCONTRADO NO PERÍODO SELECIONADO.")
+
+
+render_relatorios = render_relatorio_colaborador
