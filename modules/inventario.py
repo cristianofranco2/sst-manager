@@ -191,3 +191,182 @@ def render_inventario() -> None:
                 submitted = st.form_submit_button("💾 Registrar Entrada")
 
                 if submitted:
+                    try:
+                        epi_escolhido = mapa_epis.get(epi_sel_id, {})
+                        ca_escolhido = str(
+                            epi_escolhido.get("ca") or epi_escolhido.get("numero_ca") or ""
+                        ).strip()
+                        val_escolhida = (
+                            str(data_validade_lote)
+                            if informar_val_lote
+                            else str(
+                                _parse_data(
+                                    epi_escolhido.get("data_validade_ca")
+                                    or epi_escolhido.get("validade_ca")
+                                )
+                                or data_validade_lote
+                            )
+                        )
+
+                        novo_lote = {
+                            "epi_id": epi_sel_id,
+                            "codigo_lote": codigo_lote.strip(),
+                            "quantidade_inicial": int(quantidade),
+                            "quantidade_disponivel": int(quantidade),
+                            "data_entrada": str(data_entrada),
+                            "ca": ca_escolhido,
+                            "data_validade": val_escolhida,
+                            "observacoes": observacoes.strip(),
+                        }
+                        supabase.table("inventario_epi").insert(novo_lote).execute()
+                        _limpar_cache_inventario()
+                        st.success("Entrada adicionada ao inventário com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao registrar entrada no inventário: {e}")
+
+        st.markdown("---")
+        st.subheader("📊 Saldo Atual por EPI (SKU, CA e Validade)")
+
+        agrupado_saldo: dict[tuple[str, str, str], dict] = {}
+        for item in inventario:
+            eid = str(item.get("epi_id") or "").strip()
+            epi_ref = mapa_epis.get(eid, {})
+
+            sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or eid or "—").strip()
+            nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
+            ca = str(
+                item.get("ca")
+                or item.get("numero_ca")
+                or epi_ref.get("ca")
+                or epi_ref.get("numero_ca")
+                or "—"
+            ).strip()
+
+            dt_val = _parse_data(
+                item.get("data_validade")
+                or item.get("data_validade_lote")
+                or epi_ref.get("data_validade_ca")
+                or epi_ref.get("validade_ca")
+            )
+            validade_str = dt_val.strftime("%d/%m/%Y") if dt_val else "—"
+
+            chave_unica = (sku, ca, validade_str)
+            qtd_disp = int(item.get("quantidade_disponivel") or 0)
+
+            if chave_unica not in agrupado_saldo:
+                agrupado_saldo[chave_unica] = {
+                    "SKU": sku,
+                    "EPI": nome_epi,
+                    "CA": ca,
+                    "Validade": validade_str,
+                    "Saldo Disponível": 0,
+                    "Qtd. Lotes": 0,
+                }
+
+            agrupado_saldo[chave_unica]["Saldo Disponível"] += qtd_disp
+            agrupado_saldo[chave_unica]["Qtd. Lotes"] += 1
+
+        if agrupado_saldo:
+            df_saldos = pd.DataFrame(list(agrupado_saldo.values())).sort_values(
+                by=["SKU", "Validade", "CA"], ascending=[True, True, True]
+            )
+            st.dataframe(df_saldos, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum saldo registrado no inventário até o momento.")
+
+    with tab3:
+        st.subheader("Ajustar Saldo de Lote Existente")
+        if not inventario:
+            st.info("Nenhum lote disponível para ajuste.")
+        else:
+            opcoes_lotes = [str(l.get("id")) for l in inventario if l.get("id")]
+            mapa_rotulos_lote = {}
+            for l in inventario:
+                lid = str(l.get("id") or "")
+                if not lid:
+                    continue
+                epi_ref = mapa_epis.get(str(l.get("epi_id") or "").strip(), {})
+                sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or "—").strip()
+                nome = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
+                ca = str(l.get("ca") or epi_ref.get("ca") or "—").strip()
+                val = _formatar_data_br(l.get("data_validade") or epi_ref.get("data_validade_ca"))
+                mapa_rotulos_lote[lid] = (
+                    f"{sku} — {nome} | CA {ca} | Val. {val} | "
+                    f"Lote {l.get('codigo_lote') or '—'} | Saldo: {l.get('quantidade_disponivel', 0)}"
+                )
+
+            lote_ajuste_id = st.selectbox(
+                "Selecione o Lote",
+                options=opcoes_lotes,
+                format_func=lambda lid: mapa_rotulos_lote.get(lid, lid),
+                key="select_lote_ajuste",
+            )
+            lote_atual = next((l for l in inventario if str(l.get("id")) == lote_ajuste_id), {})
+            saldo_atual = int(lote_atual.get("quantidade_disponivel") or 0)
+
+            with st.form("form_ajuste_saldo_lote"):
+                novo_saldo = st.number_input(
+                    "Novo Saldo Disponível",
+                    min_value=0,
+                    value=saldo_atual,
+                    step=1,
+                )
+                motivo_ajuste = st.text_input("Motivo do Ajuste", placeholder="Ex: Inventário físico / avaria")
+                btn_ajustar = st.form_submit_button("💾 Salvar Ajuste")
+
+                if btn_ajustar:
+                    try:
+                        obs_antiga = str(lote_atual.get("observacoes") or "").strip()
+                        extra_obs = f"Ajuste ({date.today().strftime('%d/%m/%Y')}): {saldo_atual} -> {int(novo_saldo)}"
+                        if motivo_ajuste.strip():
+                            extra_obs += f" ({motivo_ajuste.strip()})"
+                        obs_final = f"{obs_antiga} | {extra_obs}".strip(" |")
+
+                        supabase.table("inventario_epi").update({
+                            "quantidade_disponivel": int(novo_saldo),
+                            "observacoes": obs_final,
+                        }).eq("id", lote_ajuste_id).execute()
+                        _limpar_cache_inventario()
+                        st.success("Saldo atualizado com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao atualizar saldo: {e}")
+
+    with tab4:
+        st.subheader("Histórico de Trocas de EPI por Colaborador")
+        if not historico_trocas:
+            st.info("Nenhuma troca de EPI registrada até o momento.")
+        else:
+            opcoes_colab = ["TODOS"] + list(mapa_colabs.keys())
+            colab_filtro = st.selectbox(
+                "Filtrar por Colaborador",
+                options=opcoes_colab,
+                format_func=lambda cid: (
+                    "Todos os Colaboradores"
+                    if cid == "TODOS"
+                    else f"{mapa_colabs[cid].get('nome_completo', '—')} ({mapa_colabs[cid].get('matricula', '')})"
+                ),
+                key="filtro_colab_hist_trocas_inv",
+            )
+
+            linhas_hist = []
+            for h in historico_trocas:
+                cid = str(h.get("colaborador_id") or "").strip()
+                if colab_filtro != "TODOS" and cid != colab_filtro:
+                    continue
+                c_info = mapa_colabs.get(cid, {})
+                e_info = mapa_epis.get(str(h.get("epi_id") or "").strip(), {})
+                linhas_hist.append({
+                    "Data da Troca": _formatar_data_br(h.get("data_troca")),
+                    "Colaborador": c_info.get("nome_completo") or "—",
+                    "Matrícula": c_info.get("matricula") or "—",
+                    "EPI": e_info.get("descricao") or e_info.get("nome_epi") or "EPI",
+                    "Quantidade": int(h.get("quantidade") or 1),
+                    "Motivo": str(h.get("motivo") or "—"),
+                })
+
+            if linhas_hist:
+                st.dataframe(pd.DataFrame(linhas_hist), use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhuma troca encontrada para o colaborador selecionado.")
