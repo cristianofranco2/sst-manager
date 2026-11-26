@@ -153,7 +153,34 @@ def obter_logo_bytes() -> bytes:
 
 
 def render_logo_sidebar() -> None:
-    st.sidebar.caption("Gestor SST • Indaiatuba - SP")
+    st.sidebar.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800&display=swap');
+        .gestor-sst-titulo {
+            font-family: 'Montserrat', 'Segoe UI', sans-serif;
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            color: #0A3A4E;
+            line-height: 1.1;
+            margin: 4px 0 6px 0;
+        }
+        .gestor-sst-sub {
+            font-family: 'Montserrat', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 500;
+            color: #64748B;
+            margin: 0 0 10px 0;
+        }
+        </style>
+        <div>
+            <div class="gestor-sst-titulo">Gestor SST</div>
+            <div class="gestor-sst-sub">Indaiatuba - SP</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.sidebar.markdown("---")
 
 
@@ -267,54 +294,4 @@ def gerar_pdf_historico_colaborador(
             "Status",
             str(colab.get("status") or "Ativo"),
             "Admissão",
-            str(colab.get("data_admissao_br") or "—"),
-        ],
-    ]
-    t_colab = Table(dados_colab, colWidths=[3.5 * cm, 6.0 * cm, 3.0 * cm, 5.5 * cm])
-    t_colab.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#EDF2F7")),
-            ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#EDF2F7")),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("PADDING", (0, 0), (-1, -1), 5),
-        ])
-    )
-    elementos.append(t_colab)
-
-    elementos.append(Paragraph("Registro de Trocas Realizadas e Renovações Efetuadas", estilo_secao))
-    if not movimentacoes_realizadas:
-        elementos.append(
-            Paragraph("Nenhuma troca de EPI ou renovação registrada para este colaborador.", estilo_sub)
-        )
-    else:
-        cabecalhos = ["Data Realização", "Tipo de Registro", "Item", "Detalhes / Observações"]
-        linhas = [
-            [
-                str(m.get("Data Realização") or "—"),
-                str(m.get("Tipo de Registro") or "—"),
-                str(m.get("Item") or "—"),
-                str(m.get("Detalhes / Observações") or "—"),
-            ]
-            for m in movimentacoes_realizadas
-        ]
-        tab_mov = Table(
-            [cabecalhos] + linhas,
-            colWidths=[2.8 * cm, 4.2 * cm, 5.5 * cm, 5.5 * cm],
-            repeatRows=1,
-        )
-        tab_mov.setStyle(
-            TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0B3954")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7FAFC")]),
-                ("PADDING", (0, 0), (-1, -1), 5),
-            ])
-        )
-        elementos.append(tab_mov)
-
-    doc.build(elementos)
-    return buffer.getvalue(), None
+            str(colab.get("data_admissao_
