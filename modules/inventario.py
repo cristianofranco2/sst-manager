@@ -74,6 +74,29 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
+def _obter_ca(item: dict, epi_ref: dict) -> str:
+    return str(
+        item.get("ca")
+        or item.get("numero_ca")
+        or item.get("codigo_ca")
+        or epi_ref.get("ca")
+        or epi_ref.get("numero_ca")
+        or epi_ref.get("codigo_ca")
+        or "—"
+    ).strip()
+
+
+def _obter_validade(item: dict, epi_ref: dict) -> date | None:
+    return _parse_data(
+        item.get("data_validade")
+        or item.get("data_validade_lote")
+        or item.get("validade_lote")
+        or epi_ref.get("data_validade_ca")
+        or epi_ref.get("validade_ca")
+        or epi_ref.get("data_validade")
+    )
+
+
 def render_inventario() -> None:
     render_cabecalho_modulo("📦 Cadastro de Inventário e Histórico de Trocas")
 
@@ -114,19 +137,8 @@ def render_inventario() -> None:
                 epi_ref = mapa_epis.get(eid, {})
                 sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or "—").strip()
                 nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-                ca = str(
-                    item.get("ca")
-                    or item.get("numero_ca")
-                    or epi_ref.get("ca")
-                    or epi_ref.get("numero_ca")
-                    or "—"
-                ).strip()
-                validade = _formatar_data_br(
-                    item.get("data_validade")
-                    or item.get("data_validade_lote")
-                    or epi_ref.get("data_validade_ca")
-                    or epi_ref.get("validade_ca")
-                )
+                ca = _obter_ca(item, epi_ref)
+                validade = _formatar_data_br(_obter_validade(item, epi_ref))
                 linhas_lotes.append({
                     "Lote": str(item.get("codigo_lote") or "—"),
                     "SKU": sku,
@@ -153,7 +165,7 @@ def render_inventario() -> None:
                 e = mapa_epis.get(eid, {})
                 sku = str(e.get("codigo_sku") or e.get("sku") or eid).strip()
                 nome = str(e.get("descricao") or e.get("nome_epi") or "EPI").strip()
-                ca = str(e.get("ca") or e.get("numero_ca") or "—").strip()
+                ca = _obter_ca({}, e)
                 val = _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca"))
                 return f"{sku} — {nome} | CA {ca} | Val. {val}"
 
@@ -193,9 +205,7 @@ def render_inventario() -> None:
                 if submitted:
                     try:
                         epi_escolhido = mapa_epis.get(epi_sel_id, {})
-                        ca_escolhido = str(
-                            epi_escolhido.get("ca") or epi_escolhido.get("numero_ca") or ""
-                        ).strip()
+                        ca_escolhido = _obter_ca({}, epi_escolhido)
                         val_escolhida = (
                             str(data_validade_lote)
                             if informar_val_lote
@@ -208,15 +218,22 @@ def render_inventario() -> None:
                             )
                         )
 
+                        obs_texto = observacoes.strip()
+                        if informar_val_lote:
+                            marcador_val = f"Val. Lote: {data_validade_lote.strftime('%d/%m/%Y')}"
+                            obs_texto = f"{obs_texto} | {marcador_val}".strip(" |")
+                        if ca_escolhido != "—":
+                            marcador_ca = f"CA: {ca_escolhido}"
+                            if marcador_ca.lower() not in obs_texto.lower():
+                                obs_texto = f"{obs_texto} | {marcador_ca}".strip(" |")
+
                         novo_lote = {
                             "epi_id": epi_sel_id,
                             "codigo_lote": codigo_lote.strip(),
                             "quantidade_inicial": int(quantidade),
                             "quantidade_disponivel": int(quantidade),
                             "data_entrada": str(data_entrada),
-                            "ca": ca_escolhido,
-                            "data_validade": val_escolhida,
-                            "observacoes": observacoes.strip(),
+                            "observacoes": obs_texto,
                         }
                         supabase.table("inventario_epi").insert(novo_lote).execute()
                         _limpar_cache_inventario()
@@ -235,20 +252,14 @@ def render_inventario() -> None:
 
             sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or eid or "—").strip()
             nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-            ca = str(
-                item.get("ca")
-                or item.get("numero_ca")
-                or epi_ref.get("ca")
-                or epi_ref.get("numero_ca")
-                or "—"
-            ).strip()
+            ca = _obter_ca(item, epi_ref)
 
-            dt_val = _parse_data(
-                item.get("data_validade")
-                or item.get("data_validade_lote")
-                or epi_ref.get("data_validade_ca")
-                or epi_ref.get("validade_ca")
-            )
+            dt_val = _obter_validade(item, epi_ref)
+            if not dt_val and item.get("observacoes"):
+                obs_str = str(item.get("observacoes"))
+                if "Val. Lote:" in obs_str:
+                    trecho = obs_str.split("Val. Lote:", 1)[1][:10]
+                    dt_val = _parse_data(trecho)
             validade_str = dt_val.strftime("%d/%m/%Y") if dt_val else "—"
 
             chave_unica = (sku, ca, validade_str)
@@ -289,8 +300,8 @@ def render_inventario() -> None:
                 epi_ref = mapa_epis.get(str(l.get("epi_id") or "").strip(), {})
                 sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or "—").strip()
                 nome = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-                ca = str(l.get("ca") or epi_ref.get("ca") or "—").strip()
-                val = _formatar_data_br(l.get("data_validade") or epi_ref.get("data_validade_ca"))
+                ca = _obter_ca(l, epi_ref)
+                val = _formatar_data_br(_obter_validade(l, epi_ref))
                 mapa_rotulos_lote[lid] = (
                     f"{sku} — {nome} | CA {ca} | Val. {val} | "
                     f"Lote {l.get('codigo_lote') or '—'} | Saldo: {l.get('quantidade_disponivel', 0)}"
