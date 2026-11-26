@@ -5,6 +5,9 @@ import streamlit as st
 from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
+DATA_MIN_CALENDARIO = date(1900, 1, 1)
+DATA_MAX_CALENDARIO = date(2100, 12, 31)
+
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _buscar_colaboradores() -> list[dict]:
@@ -156,7 +159,13 @@ def render_colaboradores() -> None:
                 cpf = st.text_input("CPF * (somente números)")
                 rg_numero = st.text_input("RG")
             with c3:
-                data_nascimento = st.date_input("Data de Nascimento", format="DD/MM/YYYY")
+                data_nascimento = st.date_input(
+                    "Data de Nascimento",
+                    value=date(1990, 1, 1),
+                    min_value=DATA_MIN_CALENDARIO,
+                    max_value=DATA_MAX_CALENDARIO,
+                    format="DD/MM/YYYY",
+                )
                 genero = st.selectbox("Gênero", ["Masculino", "Feminino", "Outro", "Não informado"])
 
             st.markdown("---")
@@ -175,7 +184,13 @@ def render_colaboradores() -> None:
                     "Tipo de Contrato", ["CLT", "PJ", "Estágio", "Temporário", "Terceirizado"]
                 )
             with c6:
-                data_admissao = st.date_input("Data de Admissão", format="DD/MM/YYYY")
+                data_admissao = st.date_input(
+                    "Data de Admissão",
+                    value=date.today(),
+                    min_value=DATA_MIN_CALENDARIO,
+                    max_value=DATA_MAX_CALENDARIO,
+                    format="DD/MM/YYYY",
+                )
                 status = st.selectbox("Status Inicial", ["Ativo", "Afastado", "Férias", "Desligado"])
 
             superior_imediato = st.text_input("Gestor Direto / Superior Imediato")
