@@ -74,20 +74,25 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
-def _normalizar_campo(valor: str) -> str:
+def _normalizar_campo(valor) -> str:
     return " ".join(str(valor or "").strip().lower().split())
 
 
 def _obter_ca(item: dict, epi_ref: dict) -> str:
-    return str(
+    ca = str(
         item.get("ca")
         or item.get("numero_ca")
         or item.get("codigo_ca")
         or epi_ref.get("ca")
         or epi_ref.get("numero_ca")
         or epi_ref.get("codigo_ca")
-        or "—"
+        or ""
     ).strip()
+    if not ca and item.get("observacoes"):
+        obs = str(item.get("observacoes"))
+        if "CA:" in obs:
+            ca = obs.split("CA:", 1)[1].split("|")[0].strip()
+    return ca or "—"
 
 
 def _obter_validade(item: dict, epi_ref: dict) -> date | None:
@@ -107,49 +112,59 @@ def _obter_validade(item: dict, epi_ref: dict) -> date | None:
     return dt_val
 
 
+def _extrair_campos_item(item: dict, mapa_epis: dict[str, dict]) -> dict:
+    eid = str(item.get("epi_id") or "").strip()
+    epi_ref = mapa_epis.get(eid, {})
+    sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or eid or "—").strip()
+    nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
+    ca = _obter_ca(item, epi_ref)
+    dt_val = _obter_validade(item, epi_ref)
+    validade_str = dt_val.strftime("%d/%m/%Y") if dt_val else "—"
+    saldo = int(item.get("quantidade_disponivel") or 0)
+    return {
+        "sku": sku,
+        "nome_epi": nome_epi,
+        "ca": ca,
+        "validade": validade_str,
+        "saldo": saldo,
+    }
+
+
 def _construir_tabela_saldos(inventario: list[dict], mapa_epis: dict[str, dict]) -> pd.DataFrame:
     """
-    Agrupa e soma o saldo apenas quando SKU, CA e Validade forem iguais
-    (itens com mesmo SKU mas CA ou Validade diferentes ficam em linhas distintas).
+    Soma o saldo apenas quando SKU, EPI, CA e Validade forem iguais.
+    Itens com mesmo SKU mas CA ou Validade diferentes permanecem em linhas separadas.
     """
-    agrupado: dict[tuple[str, str, str], dict] = {}
+    agrupado: dict[tuple[str, str, str, str], dict] = {}
 
     for item in inventario:
-        eid = str(item.get("epi_id") or "").strip()
-        epi_ref = mapa_epis.get(eid, {})
-
-        sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or eid or "—").strip()
-        nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-        ca = _obter_ca(item, epi_ref)
-
-        dt_val = _obter_validade(item, epi_ref)
-        validade_str = dt_val.strftime("%d/%m/%Y") if dt_val else "—"
-
-        chave_unica = (
-            _normalizar_campo(sku),
-            _normalizar_campo(ca),
-            validade_str,
+        campos = _extrair_campos_item(item, mapa_epis)
+        chave = (
+            _normalizar_campo(campos["sku"]),
+            _normalizar_campo(campos["nome_epi"]),
+            _normalizar_campo(campos["ca"]),
+            campos["validade"],
         )
-        qtd_disp = int(item.get("quantidade_disponivel") or 0)
 
-        if chave_unica not in agrupado:
-            agrupado[chave_unica] = {
-                "SKU": sku,
-                "EPI": nome_epi,
-                "CA": ca,
-                "Validade": validade_str,
-                "Saldo Disponível": 0,
-                "Qtd. Lotes": 0,
+        if chave not in agrupado:
+            agrupado[chave] = {
+                "SKU": campos["sku"],
+                "EPI": campos["nome_epi"],
+                "CA": campos["ca"],
+                "Validade": campos["validade"],
+                "Saldo Total": 0,
+                "Qtd. Registros": 0,
             }
 
-        agrupado[chave_unica]["Saldo Disponível"] += qtd_disp
-        agrupado[chave_unica]["Qtd. Lotes"] += 1
+        agrupado[chave]["Saldo Total"] += campos["saldo"]
+        agrupado[chave]["Qtd. Registros"] += 1
 
     if not agrupado:
         return pd.DataFrame()
 
     return pd.DataFrame(list(agrupado.values())).sort_values(
-        by=["SKU", "Validade", "CA"], ascending=[True, True, True]
+        by=["SKU", "EPI", "Validade", "CA"],
+        ascending=[True, True, True, True],
     )
 
 
@@ -180,7 +195,7 @@ def render_inventario() -> None:
     with tab1:
         col_t, col_b = st.columns([4, 1])
         with col_t:
-            st.subheader("📊 Saldo Consolidado por EPI (SKU, CA e Validade)")
+            st.subheader("📊 Saldo Atual por EPI (Agrupado por SKU, CA e Validade)")
         with col_b:
             if st.button("🔄 Atualizar", key="btn_att_inv_tab1", use_container_width=True):
                 _limpar_cache_inventario()
@@ -192,30 +207,24 @@ def render_inventario() -> None:
         else:
             st.info("Nenhum saldo registrado no inventário.")
 
-        st.markdown("---")
-        st.subheader("Lotes Registrados no Inventário")
-        if inventario:
-            linhas_lotes = []
-            for item in inventario:
-                eid = str(item.get("epi_id") or "").strip()
-                epi_ref = mapa_epis.get(eid, {})
-                sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or "—").strip()
-                nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-                ca = _obter_ca(item, epi_ref)
-                validade = _formatar_data_br(_obter_validade(item, epi_ref))
-                linhas_lotes.append({
-                    "Lote": str(item.get("codigo_lote") or "—"),
-                    "SKU": sku,
-                    "EPI": nome_epi,
-                    "CA": ca,
-                    "Validade": validade,
-                    "Entrada": _formatar_data_br(item.get("data_entrada")),
-                    "Saldo Disponível": int(item.get("quantidade_disponivel") or 0),
-                    "Observações": str(item.get("observacoes") or "—"),
-                })
-            st.dataframe(pd.DataFrame(linhas_lotes), use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhum lote registrado no inventário.")
+        with st.expander("Ver lançamentos individuais (lotes / entradas)"):
+            if inventario:
+                linhas_lotes = []
+                for item in inventario:
+                    campos = _extrair_campos_item(item, mapa_epis)
+                    linhas_lotes.append({
+                        "Lote": str(item.get("codigo_lote") or "—"),
+                        "SKU": campos["sku"],
+                        "EPI": campos["nome_epi"],
+                        "CA": campos["ca"],
+                        "Validade": campos["validade"],
+                        "Entrada": _formatar_data_br(item.get("data_entrada")),
+                        "Saldo Disponível": campos["saldo"],
+                        "Observações": str(item.get("observacoes") or "—"),
+                    })
+                st.dataframe(pd.DataFrame(linhas_lotes), use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum lote registrado no inventário.")
 
     with tab2:
         st.subheader("Registrar Entrada de EPI no Inventário")
@@ -314,14 +323,10 @@ def render_inventario() -> None:
                 lid = str(l.get("id") or "")
                 if not lid:
                     continue
-                epi_ref = mapa_epis.get(str(l.get("epi_id") or "").strip(), {})
-                sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or "—").strip()
-                nome = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-                ca = _obter_ca(l, epi_ref)
-                val = _formatar_data_br(_obter_validade(l, epi_ref))
+                campos = _extrair_campos_item(l, mapa_epis)
                 mapa_rotulos_lote[lid] = (
-                    f"{sku} — {nome} | CA {ca} | Val. {val} | "
-                    f"Lote {l.get('codigo_lote') or '—'} | Saldo: {l.get('quantidade_disponivel', 0)}"
+                    f"{campos['sku']} — {campos['nome_epi']} | CA {campos['ca']} | Val. {campos['validade']} | "
+                    f"Lote {l.get('codigo_lote') or '—'} | Saldo: {campos['saldo']}"
                 )
 
             lote_ajuste_id = st.selectbox(
