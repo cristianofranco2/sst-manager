@@ -541,15 +541,28 @@ def _quebrar_linhas(texto: str, max_chars: int) -> list[str]:
     if not palavras:
         return [""]
     linhas: list[str] = []
-    atual = palavras[0]
-    for p in palavras[1:]:
-        if len(atual) + 1 + len(p) <= max_chars:
+    atual = ""
+    for p in palavras:
+        if len(p) > max_chars:
+            if atual:
+                linhas.append(atual)
+                atual = ""
+            for i in range(0, len(p), max_chars):
+                pedaco = p[i : i + max_chars]
+                if len(pedaco) == max_chars:
+                    linhas.append(pedaco)
+                else:
+                    atual = pedaco
+        elif not atual:
+            atual = p
+        elif len(atual) + 1 + len(p) <= max_chars:
             atual += " " + p
         else:
             linhas.append(atual)
             atual = p
-    linhas.append(atual)
-    return linhas
+    if atual:
+        linhas.append(atual)
+    return linhas or [""]
 
 
 def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict]) -> bytes:
@@ -567,30 +580,29 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
     paginas_cmds: list[list[str]] = []
 
     def desenhar_logo_globex(cmds: list[str], x_left: float, y_top: float) -> None:
-        # Marca limpa e nítida: emblema azul/vermelho + GLOBEX / MULTIMODAL
+        # Bloco lateral azul/vermelho + GLOBEX / MULTIMODAL sem sobreposição
         bx = x_left
         by = y_top - 24.0
-        bw = 18.0
+        bw = 10.0
         bh = 22.0
 
-        # Emblema retangular sólido com acento vermelho na base (alta nitidez em qualquer PDF viewer)
         cmds.append("0.08 0.28 0.56 rg")
         cmds.append(f"{bx:.1f} {by + 5.0:.1f} {bw:.1f} {bh - 5.0:.1f} re f")
         cmds.append("0.78 0.14 0.20 rg")
         cmds.append(f"{bx:.1f} {by:.1f} {bw:.1f} 4.0 re f")
 
-        tx = bx + bw + 7.0
+        tx = bx + bw + 6.0
         cmds.append("0.07 0.22 0.45 rg")
-        cmds.append(f"BT /F2 13.5 Tf {tx:.1f} {y_top - 13:.1f} Td ({_escapar_pdf('GLOBEX')}) Tj ET")
+        cmds.append(f"BT /F2 12.5 Tf {tx:.1f} {y_top - 12:.1f} Td ({_escapar_pdf('GLOBEX')}) Tj ET")
         cmds.append("0.20 0.44 0.72 rg")
-        cmds.append(f"BT /F2 7.5 Tf {tx:.1f} {y_top - 23:.1f} Td ({_escapar_pdf('MULTIMODAL')}) Tj ET")
+        cmds.append(f"BT /F2 7.0 Tf {tx:.1f} {y_top - 22:.1f} Td ({_escapar_pdf('MULTIMODAL')}) Tj ET")
 
     def nova_pagina() -> tuple[list[str], float]:
         cmds: list[str] = []
         top_header_y = page_h - 32.0
         desenhar_logo_globex(cmds, margin_x, top_header_y)
 
-        x_info = margin_x + 108.0
+        x_info = margin_x + 92.0
         cmds.append("0.11 0.15 0.21 rg")
         cmds.append(
             f"BT /F2 11.5 Tf {x_info:.1f} {top_header_y - 11:.1f} Td "
@@ -600,7 +612,7 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
         cmds.append("0.18 0.22 0.28 rg")
         l_sub1 = _quebrar_linhas(
             "Comprovante de Trocas de EPI e Renovacoes de Exames / Treinamentos (Auditoria / Fiscalizacao)",
-            70,
+            74,
         )
         y_sub = top_header_y - 23.0
         for idx_s, s_txt in enumerate(l_sub1):
@@ -653,17 +665,17 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
                 cmds.append(f"{x_div:.1f} {bot_y:.1f} m {x_div:.1f} {top_y:.1f} l S")
 
             cmds.append("0.22 0.26 0.32 rg")
-            cmds.append(f"BT /F1 8.5 Tf {margin_x + 6:.1f} {bot_y + 7.5:.1f} Td ({_escapar_pdf(l1)}) Tj ET")
-            cmds.append(f"BT /F1 8.5 Tf {margin_x + 2 * col_w + 6:.1f} {bot_y + 7.5:.1f} Td ({_escapar_pdf(l2)}) Tj ET")
+            cmds.append(f"BT /F1 7.5 Tf {margin_x + 5:.1f} {bot_y + 8.0:.1f} Td ({_escapar_pdf(l1)}) Tj ET")
+            cmds.append(f"BT /F1 7.5 Tf {margin_x + 2 * col_w + 5:.1f} {bot_y + 8.0:.1f} Td ({_escapar_pdf(l2)}) Tj ET")
 
             cmds.append("0.11 0.15 0.21 rg")
             cmds.append(
-                f"BT /F1 8.5 Tf {margin_x + col_w + 6:.1f} {bot_y + 7.5:.1f} Td "
-                f"({_escapar_pdf(_quebrar_linhas(str(v1), 24)[0])}) Tj ET"
+                f"BT /F1 7.5 Tf {margin_x + col_w + 5:.1f} {bot_y + 8.0:.1f} Td "
+                f"({_escapar_pdf(_quebrar_linhas(str(v1), 28)[0])}) Tj ET"
             )
             cmds.append(
-                f"BT /F1 8.5 Tf {margin_x + 3 * col_w + 6:.1f} {bot_y + 7.5:.1f} Td "
-                f"({_escapar_pdf(_quebrar_linhas(str(v2), 24)[0])}) Tj ET"
+                f"BT /F1 7.5 Tf {margin_x + 3 * col_w + 5:.1f} {bot_y + 8.0:.1f} Td "
+                f"({_escapar_pdf(_quebrar_linhas(str(v2), 28)[0])}) Tj ET"
             )
 
         y_cursor = y_cursor - len(grid_rows) * row_h - 24.0
@@ -676,9 +688,9 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
         y_cursor -= 12.0
         return cmds, y_cursor
 
-    w_data = 92.0
-    w_tipo = 152.0
-    w_item = 112.0
+    w_data = 82.0
+    w_tipo = 136.0
+    w_item = 102.0
     w_det = usable_w - (w_data + w_tipo + w_item)
     col_widths = [w_data, w_tipo, w_item, w_det]
     headers = ["Data Realizacao", "Tipo de Registro", "Item", "Detalhes / Observacoes"]
@@ -698,7 +710,7 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
             if idx_c > 0:
                 cmds.append("0.20 0.36 0.46 RG 0.5 w")
                 cmds.append(f"{x_cur:.1f} {bot_y:.1f} m {x_cur:.1f} {y_top:.1f} l S")
-            cmds.append(f"BT /F2 8.5 Tf {x_cur + 6:.1f} {bot_y + 7.5:.1f} Td ({_escapar_pdf(h_txt)}) Tj ET")
+            cmds.append(f"BT /F2 7.5 Tf {x_cur + 5:.1f} {bot_y + 8.0:.1f} Td ({_escapar_pdf(h_txt)}) Tj ET")
             x_cur += cw
         return bot_y
 
@@ -713,13 +725,13 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
         for emoji in ("🟢", "🟠", "🟡", "🔴", "⚪"):
             detalhes = detalhes.replace(emoji, "").strip()
 
-        l_data = _quebrar_linhas(dt_real, 15)
-        l_tipo = _quebrar_linhas(tipo_reg, 28)
-        l_item = _quebrar_linhas(nome_item, 20)
-        l_det = _quebrar_linhas(detalhes, 36)
+        l_data = _quebrar_linhas(dt_real, 16)
+        l_tipo = _quebrar_linhas(tipo_reg, 30)
+        l_item = _quebrar_linhas(nome_item, 22)
+        l_det = _quebrar_linhas(detalhes, 42)
 
         max_linhas = max(len(l_data), len(l_tipo), len(l_item), len(l_det), 1)
-        row_h = max(20.0, max_linhas * 11.5 + 7.0)
+        row_h = max(20.0, max_linhas * 10.5 + 7.0)
 
         if y_cur - row_h < 45.0:
             paginas_cmds.append(cmds_atual)
@@ -741,8 +753,8 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
             if idx_c > 0:
                 cmds_atual.append(f"{x_cur:.1f} {bot_y:.1f} m {x_cur:.1f} {y_cur:.1f} l S")
             for k_l, txt_l in enumerate(linhas_cel):
-                ty = y_cur - 12.5 - k_l * 11.5
-                cmds_atual.append(f"BT /F1 8.5 Tf {x_cur + 6:.1f} {ty:.1f} Td ({_escapar_pdf(txt_l)}) Tj ET")
+                ty = y_cur - 12.0 - k_l * 10.5
+                cmds_atual.append(f"BT /F1 7.5 Tf {x_cur + 5:.1f} {ty:.1f} Td ({_escapar_pdf(txt_l)}) Tj ET")
             x_cur += cw
 
         y_cur = bot_y
