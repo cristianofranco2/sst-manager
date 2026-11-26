@@ -7,6 +7,7 @@ from ui_components import render_cabecalho_modulo
 
 DATA_MIN_CALENDARIO = date(1900, 1, 1)
 DATA_MAX_CALENDARIO = date(2100, 12, 31)
+COLUNAS_OBRIGATORIAS_EPI = {"numero_ca"}
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -66,11 +67,11 @@ def _extrair_id_inserido(res) -> str | None:
 
 def _inserir_epi_com_fallback(supabase, payload: dict):
     """
-    Insere na tabela 'epis' e, se ocorrer PGRST204 por coluna inexistente,
-    remove a coluna indicada na mensagem de erro e tenta novamente.
+    Insere na tabela 'epis' garantindo que colunas obrigatórias (como numero_ca)
+    sejam preservadas e removendo apenas colunas opcionais inexistentes em caso de PGRST204.
     """
     dados = dict(payload)
-    for _ in range(10):
+    for _ in range(12):
         try:
             return supabase.table("epis").insert(dados).execute()
         except Exception as e:
@@ -79,7 +80,7 @@ def _inserir_epi_com_fallback(supabase, payload: dict):
                 partes = msg.split("'")
                 if len(partes) >= 2:
                     col_invalida = partes[1].strip()
-                    if col_invalida in dados:
+                    if col_invalida in dados and col_invalida not in COLUNAS_OBRIGATORIAS_EPI:
                         dados.pop(col_invalida)
                         continue
             raise
@@ -115,7 +116,7 @@ def _inserir_entrada_inicial_inventario(
     }
 
     dados = dict(payload)
-    for _ in range(10):
+    for _ in range(12):
         try:
             supabase.table("inventario_epi").insert(dados).execute()
             return True, None
@@ -125,7 +126,7 @@ def _inserir_entrada_inicial_inventario(
                 partes = msg.split("'")
                 if len(partes) >= 2:
                     col_invalida = partes[1].strip()
-                    if col_invalida in dados:
+                    if col_invalida in dados and col_invalida != "epi_id":
                         dados.pop(col_invalida)
                         continue
             return False, msg
@@ -217,16 +218,20 @@ def render_epis() -> None:
             submitted = st.form_submit_button("💾 Salvar EPI")
 
             if submitted:
-                if not codigo_sku.strip() or not descricao.strip() or not ca.strip():
+                sku_limpo = codigo_sku.strip()
+                desc_limpa = descricao.strip()
+                ca_limpo = ca.strip()
+
+                if not sku_limpo or not desc_limpa or not ca_limpo:
                     st.warning("Preencha os campos obrigatórios: Código SKU, Descrição do EPI e Número do CA.")
                 else:
                     try:
                         novo_epi = {
-                            "codigo_sku": codigo_sku.strip(),
-                            "descricao": descricao.strip(),
+                            "codigo_sku": sku_limpo,
+                            "descricao": desc_limpa,
                             "categoria": categoria.strip(),
                             "modelo": modelo.strip(),
-                            "numero_ca": ca.strip(),
+                            "numero_ca": ca_limpo,
                             "data_validade_ca": str(validade_ca),
                             "durabilidade_dias": int(durabilidade_dias),
                             "estoque_minimo": int(estoque_minimo),
@@ -238,8 +243,8 @@ def render_epis() -> None:
                             busca = (
                                 supabase.table("epis")
                                 .select("id")
-                                .eq("codigo_sku", codigo_sku.strip())
-                                .eq("numero_ca", ca.strip())
+                                .eq("codigo_sku", sku_limpo)
+                                .eq("numero_ca", ca_limpo)
                                 .order("id", desc=True)
                                 .limit(1)
                                 .execute()
@@ -252,10 +257,10 @@ def render_epis() -> None:
                                     supabase=supabase,
                                     epi_id=epi_id,
                                     quantidade=int(qtd_inicial),
-                                    ca=ca.strip(),
+                                    ca=ca_limpo,
                                     validade_ca=validade_ca,
-                                    sku=codigo_sku.strip(),
-                                    descricao=descricao.strip(),
+                                    sku=sku_limpo,
+                                    descricao=desc_limpa,
                                 )
                                 if ok_inv:
                                     st.success(
