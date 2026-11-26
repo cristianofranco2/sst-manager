@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -12,7 +13,7 @@ def _buscar_tipos_exames() -> list[dict]:
 
 
 def render_tipos_exames() -> None:
-    st.title("📋 Cadastro de Exames")
+    render_cabecalho_modulo("📋 Cadastro de Exames")
 
     try:
         supabase = get_supabase()
