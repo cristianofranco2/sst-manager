@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import gerar_pdf_historico_colaborador, render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -150,7 +151,7 @@ def _normalizar_lista_ids(valor) -> list[str]:
 
 
 def render_relatorio_colaborador() -> None:
-    st.title("📄 Relatório de Pendências e Vencimentos por Colaborador")
+    render_cabecalho_modulo("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
     try:
         supabase = get_supabase()
@@ -158,9 +159,10 @@ def render_relatorio_colaborador() -> None:
         st.error(f"Erro ao conectar com o Supabase: {e}")
         return
 
-    tab1, tab2 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "👤 Visão por Colaborador",
-        "📊 Relatório por Período (Trocas, Exames e Treinamentos)",
+        "🕒 Histórico do Colaborador (PDF)",
+        "📊 Relatório por Período",
     ])
 
     colaboradores = _buscar_colaboradores()
@@ -180,6 +182,180 @@ def render_relatorio_colaborador() -> None:
     mapa_trein = {str(t["id"]).strip(): t for t in treinamentos if t.get("id")}
     mapa_exames = {str(x["id"]).strip(): x for x in exames if x.get("id")}
 
+    if not colaboradores:
+        st.info("Nenhum colaborador cadastrado.")
+        return
+
+    colab_id = st.selectbox(
+        "Selecione o Colaborador",
+        options=ids_colabs,
+        format_func=lambda cid: (
+            f"{mapa_colabs[cid].get('nome_completo', 'Sem nome')} "
+            f"({mapa_colabs[cid].get('matricula', '')}) — {mapa_colabs[cid].get('cargo', '')} "
+            f"[{mapa_colabs[cid].get('status', 'Ativo')}]"
+        ),
+        key="select_colab_relatorio",
+    )
+
+    colab = mapa_colabs[colab_id]
+    nome_colab = str(colab.get("nome_completo") or "—").strip()
+    funcao_colab = str(colab.get("cargo") or "—").strip()
+    matricula_colab = str(colab.get("matricula") or "—").strip()
+    setor_colab = str(colab.get("centro_custo") or "—").strip()
+    status_colab = str(colab.get("status") or "Ativo").strip()
+    data_admissao = _parse_data(colab.get("data_admissao"))
+    is_desligado = status_colab.lower() in ["desligado", "inativo"]
+
+    with st.container(border=True):
+        h1, h2, h3, h4, h5 = st.columns([3, 2, 1.5, 1.5, 1.5])
+        h1.markdown(f"**Colaborador:**  \n{nome_colab}")
+        h2.markdown(f"**Função:**  \n{funcao_colab}")
+        h3.markdown(f"**Matrícula:**  \n{matricula_colab}")
+        h4.markdown(f"**Setor:**  \n{setor_colab}")
+        h5.markdown(f"**Status:**  \n{'🔴 ' + status_colab if is_desligado else '🟢 ' + status_colab}")
+
+    if is_desligado:
+        st.warning(
+            "⚠️ **Colaborador Desligado:** Os contadores de vencimento e alertas foram desativados "
+            "para este colaborador. Os registros são mantidos exclusivamente para consulta histórica."
+        )
+
+    funcao_id_encontrado = str(colab.get("funcao_id")).strip() if colab.get("funcao_id") else None
+    if not funcao_id_encontrado:
+        alvo = " ".join(funcao_colab.lower().split())
+        for f in funcoes:
+            nome_f = " ".join(str(f.get("nome_funcao") or "").lower().split())
+            if nome_f and nome_f == alvo:
+                funcao_id_encontrado = str(f.get("id")).strip()
+                break
+
+    req_funcao = {}
+    if funcao_id_encontrado:
+        for r in requisitos_lista:
+            if str(r.get("funcao_id") or "").strip() == funcao_id_encontrado:
+                req_funcao = r
+                break
+
+    hoje = date.today()
+    epi_ids_req = _normalizar_lista_ids(req_funcao.get("epi_ids"))
+    epi_qtds_req = req_funcao.get("epi_quantidades") or {}
+    trein_ids_req = _normalizar_lista_ids(req_funcao.get("treinamento_ids"))
+    exame_ids_req = _normalizar_lista_ids(req_funcao.get("exame_ids"))
+
+    # Monta histórico consolidado do colaborador selecionado
+    historico_colab_eventos: list[dict] = []
+    for h in historico_trocas:
+        if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
+            eid_h = str(h.get("epi_id") or "").strip()
+            epi_h = mapa_epis.get(eid_h, {})
+            historico_colab_eventos.append({
+                "Data": _formatar_data_br(h.get("data_troca")),
+                "Tipo": "🥽 Troca de EPI",
+                "Item": str(epi_h.get("descricao") or epi_h.get("nome_epi") or "EPI"),
+                "Vencimento": _formatar_data_br(h.get("data_vencimento_novo")),
+                "Detalhes": f"Qtd: {h.get('quantidade', 1)} | {h.get('motivo') or 'Troca'}",
+            })
+
+    for ec in exames_colab:
+        if str(ec.get("colaborador_id") or "").strip() == str(colab_id).strip():
+            ex_c = mapa_exames.get(str(ec.get("tipo_exame_id") or "").strip(), {})
+            historico_colab_eventos.append({
+                "Data": _formatar_data_br(ec.get("data_realizacao")),
+                "Tipo": "📋 Exame Realizado",
+                "Item": str(ex_c.get("nome_exame") or "Exame"),
+                "Vencimento": _formatar_data_br(ec.get("data_vencimento")),
+                "Detalhes": str(ec.get("observacoes") or "Realização registrada"),
+            })
+
+    for tr in treinamentos:
+        if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
+            historico_colab_eventos.append({
+                "Data": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_emissao")),
+                "Tipo": "🎓 Treinamento Realizado",
+                "Item": str(tr.get("tipo_treinamento") or "Treinamento"),
+                "Vencimento": _formatar_data_br(tr.get("data_vencimento")),
+                "Detalhes": f"{tr.get('tipo_capacitacao') or 'Capacitação'} ({tr.get('carga_horaria') or '—'}h)",
+            })
+
+    # Prepara linhas de EPI, Exame e Treinamento
+    ultima_troca_epi: dict[str, dict] = {}
+    for h in historico_trocas:
+        if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
+            eid_h = str(h.get("epi_id") or "").strip()
+            if eid_h and eid_h not in ultima_troca_epi:
+                ultima_troca_epi[eid_h] = h
+
+    linhas_epi_exibicao = []
+    linhas_epi_resumo = []
+    for eid in epi_ids_req:
+        epi = mapa_epis.get(eid)
+        if not epi:
+            continue
+        nome_epi = str(epi.get("descricao") or epi.get("nome_epi") or "EPI").strip()
+        qtd = int(epi_qtds_req.get(eid, 1) or 1)
+        label_item = f"{nome_epi} (Qtd: {qtd})"
+
+        troca_info = ultima_troca_epi.get(eid)
+        data_venc_epi = _parse_data(troca_info.get("data_vencimento_novo")) if troca_info else None
+        if not data_venc_epi:
+            data_venc_epi = _parse_data(epi.get("data_validade_ca") or epi.get("validade_ca"))
+        if not data_venc_epi and data_admissao and epi.get("dias_durabilidade_media"):
+            try:
+                data_venc_epi = data_admissao + timedelta(days=int(epi["dias_durabilidade_media"]))
+            except Exception:
+                data_venc_epi = None
+
+        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_epi, hoje, is_desligado=is_desligado)
+        linhas_epi_exibicao.append((eid, epi, nome_epi, qtd, label_item, venc_str, dias_str))
+        linhas_epi_resumo.append({"EPI": label_item, "Vencimento": venc_str, "Dias Restantes": dias_str})
+
+    ultimos_exames_colab: dict[str, date] = {}
+    for ec in exames_colab:
+        if str(ec.get("colaborador_id") or "").strip() == str(colab_id).strip():
+            ex_id_c = str(ec.get("tipo_exame_id") or "").strip()
+            dt_v = _parse_data(ec.get("data_vencimento"))
+            if ex_id_c and dt_v:
+                if ex_id_c not in ultimos_exames_colab or dt_v > ultimos_exames_colab[ex_id_c]:
+                    ultimos_exames_colab[ex_id_c] = dt_v
+
+    linhas_exame_exibicao = []
+    linhas_exame_resumo = []
+    for ex_id in exame_ids_req:
+        ex = mapa_exames.get(ex_id)
+        if not ex:
+            continue
+        nome_ex = str(ex.get("nome_exame") or "Exame").strip()
+        validade_meses = int(ex.get("validade_meses") or 12)
+        data_venc_ex = ultimos_exames_colab.get(ex_id)
+        if not data_venc_ex and data_admissao:
+            data_venc_ex = _somar_meses(data_admissao, validade_meses)
+        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_ex, hoje, is_desligado=is_desligado)
+        linhas_exame_exibicao.append((ex_id, nome_ex, validade_meses, venc_str, dias_str))
+        linhas_exame_resumo.append({"Exame": nome_ex, "Vencimento": venc_str, "Dias Restantes": dias_str})
+
+    venc_por_tipo: dict[str, date] = {}
+    for tr in treinamentos:
+        if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
+            tipo_tr = " ".join(str(tr.get("tipo_treinamento") or "").lower().split())
+            dt_v = _parse_data(tr.get("data_vencimento"))
+            if tipo_tr and dt_v:
+                if tipo_tr not in venc_por_tipo or dt_v > venc_por_tipo[tipo_tr]:
+                    venc_por_tipo[tipo_tr] = dt_v
+
+    linhas_trein_exibicao = []
+    linhas_trein_resumo = []
+    for tid in trein_ids_req:
+        tr_base = mapa_trein.get(tid)
+        if not tr_base:
+            continue
+        nome_tr = str(tr_base.get("tipo_treinamento") or "Treinamento").strip()
+        chave_tr = " ".join(nome_tr.lower().split())
+        data_venc_tr = venc_por_tipo.get(chave_tr) or _parse_data(tr_base.get("data_vencimento"))
+        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_tr, hoje, is_desligado=is_desligado)
+        linhas_trein_exibicao.append((tid, tr_base, nome_tr, venc_str, dias_str))
+        linhas_trein_resumo.append({"Treinamento": nome_tr, "Vencimento": venc_str, "Dias Restantes": dias_str})
+
+    # ABA 1: VISÃO POR COLABORADOR
     with tab1:
         _, col_top2 = st.columns([5, 1])
         with col_top2:
@@ -187,108 +363,13 @@ def render_relatorio_colaborador() -> None:
                 _limpar_todo_cache_relatorio()
                 st.rerun()
 
-        if not colaboradores:
-            st.info("Nenhum colaborador cadastrado.")
-            return
-
-        colab_id = st.selectbox(
-            "Selecione o Colaborador",
-            options=ids_colabs,
-            format_func=lambda cid: (
-                f"{mapa_colabs[cid].get('nome_completo', 'Sem nome')} "
-                f"({mapa_colabs[cid].get('matricula', '')}) — {mapa_colabs[cid].get('cargo', '')} "
-                f"[{mapa_colabs[cid].get('status', 'Ativo')}]"
-            ),
-            key="select_colab_relatorio",
-        )
-
-        colab = mapa_colabs[colab_id]
-        nome_colab = str(colab.get("nome_completo") or "—").strip()
-        funcao_colab = str(colab.get("cargo") or "—").strip()
-        matricula_colab = str(colab.get("matricula") or "—").strip()
-        setor_colab = str(colab.get("centro_custo") or "—").strip()
-        status_colab = str(colab.get("status") or "Ativo").strip()
-        data_admissao = _parse_data(colab.get("data_admissao"))
-
-        is_desligado = status_colab.lower() in ["desligado", "inativo"]
-
-        with st.container(border=True):
-            h1, h2, h3, h4, h5 = st.columns([3, 2, 1.5, 1.5, 1.5])
-            h1.markdown(f"**Colaborador:**  \n{nome_colab}")
-            h2.markdown(f"**Função:**  \n{funcao_colab}")
-            h3.markdown(f"**Matrícula:**  \n{matricula_colab}")
-            h4.markdown(f"**Setor:**  \n{setor_colab}")
-            h5.markdown(f"**Status:**  \n{'🔴 ' + status_colab if is_desligado else '🟢 ' + status_colab}")
-
-        if is_desligado:
-            st.warning(
-                "⚠️ **Colaborador Desligado:** Os contadores de vencimento e alertas foram desativados "
-                "para este colaborador. Os registros são mantidos exclusivamente para consulta histórica."
-            )
-
-        funcao_id_encontrado = None
-        if colab.get("funcao_id"):
-            funcao_id_encontrado = str(colab.get("funcao_id")).strip()
-
-        if not funcao_id_encontrado:
-            alvo = " ".join(funcao_colab.lower().split())
-            for f in funcoes:
-                nome_f = " ".join(str(f.get("nome_funcao") or "").lower().split())
-                if nome_f and nome_f == alvo:
-                    funcao_id_encontrado = str(f.get("id")).strip()
-                    break
-
-        req_funcao = {}
-        if funcao_id_encontrado:
-            for r in requisitos_lista:
-                if str(r.get("funcao_id") or "").strip() == funcao_id_encontrado:
-                    req_funcao = r
-                    break
-
-        hoje = date.today()
-        epi_ids_req = _normalizar_lista_ids(req_funcao.get("epi_ids"))
-        epi_qtds_req = req_funcao.get("epi_quantidades") or {}
-        trein_ids_req = _normalizar_lista_ids(req_funcao.get("treinamento_ids"))
-        exame_ids_req = _normalizar_lista_ids(req_funcao.get("exame_ids"))
-
-        # 1. BLOCO EPIs
         st.markdown("### 🥽 EPIs")
-        ultima_troca_epi: dict[str, dict] = {}
-        for h in historico_trocas:
-            if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
-                eid_h = str(h.get("epi_id") or "").strip()
-                if eid_h and eid_h not in ultima_troca_epi:
-                    ultima_troca_epi[eid_h] = h
-
-        linhas_epi_exibicao = []
-        for eid in epi_ids_req:
-            epi = mapa_epis.get(eid)
-            if not epi:
-                continue
-            nome_epi = str(epi.get("descricao") or epi.get("nome_epi") or "EPI").strip()
-            qtd = int(epi_qtds_req.get(eid, 1) or 1)
-            label_item = f"{nome_epi} (Qtd: {qtd})"
-
-            troca_info = ultima_troca_epi.get(eid)
-            data_venc_epi = _parse_data(troca_info.get("data_vencimento_novo")) if troca_info else None
-            if not data_venc_epi:
-                data_venc_epi = _parse_data(epi.get("data_validade_ca") or epi.get("validade_ca"))
-            if not data_venc_epi and data_admissao and epi.get("dias_durabilidade_media"):
-                try:
-                    data_venc_epi = data_admissao + timedelta(days=int(epi["dias_durabilidade_media"]))
-                except Exception:
-                    data_venc_epi = None
-
-            venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_epi, hoje, is_desligado=is_desligado)
-            linhas_epi_exibicao.append((eid, epi, nome_epi, qtd, label_item, venc_str, dias_str))
-
         if linhas_epi_exibicao:
             for eid, epi, nome_epi, qtd, label_item, venc_str, dias_str in linhas_epi_exibicao:
                 c_item, c_venc, c_dias, c_acao = st.columns([4.5, 1.8, 2.2, 0.9])
                 c_item.write(label_item)
                 c_venc.write(venc_str)
                 c_dias.write(dias_str)
-
                 with c_acao:
                     if is_desligado:
                         st.caption("⏹️ Desligado")
@@ -321,7 +402,6 @@ def render_relatorio_colaborador() -> None:
                                 )
                                 lote_sel = next((l for l in lotes_epi if str(l.get("id")) == lote_sel_id), {})
                                 saldo_disp = int(lote_sel.get("quantidade_disponivel") or 1)
-
                                 qtd_troca = st.number_input(
                                     "Quantidade",
                                     min_value=1,
@@ -341,7 +421,6 @@ def render_relatorio_colaborador() -> None:
                                     value="Troca / Renovação",
                                     key=f"mot_troca_{colab_id}_{eid}",
                                 )
-
                                 dur_dias = int(epi.get("dias_durabilidade_media") or 0)
                                 novo_venc_epi = (
                                     data_troca + timedelta(days=dur_dias)
@@ -352,14 +431,12 @@ def render_relatorio_colaborador() -> None:
                                     )
                                 )
                                 st.caption(f"Novo vencimento: **{novo_venc_epi.strftime('%d/%m/%Y')}**")
-
                                 if st.button("Confirmar Troca", key=f"btn_conf_troca_{colab_id}_{eid}"):
                                     try:
                                         novo_saldo = max(0, saldo_disp - int(qtd_troca))
                                         supabase.table("inventario_epi").update(
                                             {"quantidade_disponivel": novo_saldo}
                                         ).eq("id", lote_sel_id).execute()
-
                                         supabase.table("historico_trocas_epi").insert({
                                             "colaborador_id": colab_id,
                                             "epi_id": eid,
@@ -370,7 +447,6 @@ def render_relatorio_colaborador() -> None:
                                             "data_vencimento_novo": str(novo_venc_epi),
                                             "motivo": motivo_troca.strip(),
                                         }).execute()
-
                                         _limpar_todo_cache_relatorio()
                                         st.rerun()
                                     except Exception as e:
@@ -378,39 +454,13 @@ def render_relatorio_colaborador() -> None:
         else:
             st.caption("Nenhum EPI vinculado à função deste colaborador.")
 
-        # 2. BLOCO EXAMES
         st.markdown("### 📋 Exames")
-        ultimos_exames_colab: dict[str, date] = {}
-        for ec in exames_colab:
-            if str(ec.get("colaborador_id") or "").strip() == str(colab_id).strip():
-                ex_id_c = str(ec.get("tipo_exame_id") or "").strip()
-                dt_v = _parse_data(ec.get("data_vencimento"))
-                if ex_id_c and dt_v:
-                    if ex_id_c not in ultimos_exames_colab or dt_v > ultimos_exames_colab[ex_id_c]:
-                        ultimos_exames_colab[ex_id_c] = dt_v
-
-        linhas_exame_exibicao = []
-        for ex_id in exame_ids_req:
-            ex = mapa_exames.get(ex_id)
-            if not ex:
-                continue
-            nome_ex = str(ex.get("nome_exame") or "Exame").strip()
-            validade_meses = int(ex.get("validade_meses") or 12)
-
-            data_venc_ex = ultimos_exames_colab.get(ex_id)
-            if not data_venc_ex and data_admissao:
-                data_venc_ex = _somar_meses(data_admissao, validade_meses)
-
-            venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_ex, hoje, is_desligado=is_desligado)
-            linhas_exame_exibicao.append((ex_id, nome_ex, validade_meses, venc_str, dias_str))
-
         if linhas_exame_exibicao:
             for ex_id, nome_ex, validade_meses, venc_str, dias_str in linhas_exame_exibicao:
                 c_item, c_venc, c_dias, c_acao = st.columns([4.5, 1.8, 2.2, 0.9])
                 c_item.write(nome_ex)
                 c_venc.write(venc_str)
                 c_dias.write(dias_str)
-
                 with c_acao:
                     if is_desligado:
                         st.caption("⏹️ Desligado")
@@ -428,7 +478,6 @@ def render_relatorio_colaborador() -> None:
                                 f"**{novo_venc_ex.strftime('%d/%m/%Y')}**"
                             )
                             obs_ex = st.text_input("Observação", key=f"obs_ex_{colab_id}_{ex_id}")
-
                             if st.button("Salvar Realização", key=f"btn_ren_ex_{colab_id}_{ex_id}"):
                                 try:
                                     supabase.table("exames_colaborador").insert({
@@ -446,35 +495,13 @@ def render_relatorio_colaborador() -> None:
         else:
             st.caption("Nenhum exame vinculado à função deste colaborador.")
 
-        # 3. BLOCO TREINAMENTOS
         st.markdown("### 🎓 Treinamentos")
-        venc_por_tipo: dict[str, date] = {}
-        for tr in treinamentos:
-            if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
-                tipo_tr = " ".join(str(tr.get("tipo_treinamento") or "").lower().split())
-                dt_v = _parse_data(tr.get("data_vencimento"))
-                if tipo_tr and dt_v:
-                    if tipo_tr not in venc_por_tipo or dt_v > venc_por_tipo[tipo_tr]:
-                        venc_por_tipo[tipo_tr] = dt_v
-
-        linhas_trein_exibicao = []
-        for tid in trein_ids_req:
-            tr_base = mapa_trein.get(tid)
-            if not tr_base:
-                continue
-            nome_tr = str(tr_base.get("tipo_treinamento") or "Treinamento").strip()
-            chave_tr = " ".join(nome_tr.lower().split())
-            data_venc_tr = venc_por_tipo.get(chave_tr) or _parse_data(tr_base.get("data_vencimento"))
-            venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_tr, hoje, is_desligado=is_desligado)
-            linhas_trein_exibicao.append((tid, tr_base, nome_tr, venc_str, dias_str))
-
         if linhas_trein_exibicao:
             for tid, tr_base, nome_tr, venc_str, dias_str in linhas_trein_exibicao:
                 c_item, c_venc, c_dias, c_acao = st.columns([4.5, 1.8, 2.2, 0.9])
                 c_item.write(nome_tr)
                 c_venc.write(venc_str)
                 c_dias.write(dias_str)
-
                 with c_acao:
                     if is_desligado:
                         st.caption("⏹️ Desligado")
@@ -492,7 +519,6 @@ def render_relatorio_colaborador() -> None:
                                 f"Próximo vencimento ({meses_tr}m): "
                                 f"**{novo_venc_tr.strftime('%d/%m/%Y')}**"
                             )
-
                             if st.button("Salvar Realização", key=f"btn_ren_tr_{colab_id}_{tid}"):
                                 try:
                                     supabase.table("treinamentos").insert({
@@ -516,8 +542,41 @@ def render_relatorio_colaborador() -> None:
         else:
             st.caption("Nenhum treinamento vinculado à função deste colaborador.")
 
-    # ABA 2: RELATÓRIO CONSOLIDADO POR PERÍODO
+    # ABA 2: HISTÓRICO DO COLABORADOR + IMPRESSÃO EM PDF COM LOGO
     with tab2:
+        st.subheader(f"🕒 Histórico Completo — {nome_colab}")
+
+        colab_pdf = dict(colab)
+        colab_pdf["data_admissao_br"] = _formatar_data_br(colab.get("data_admissao"))
+
+        pdf_bytes, erro_pdf = gerar_pdf_historico_colaborador(
+            colab=colab_pdf,
+            linhas_epi=linhas_epi_resumo,
+            linhas_exame=linhas_exame_resumo,
+            linhas_trein=linhas_trein_resumo,
+            historico_eventos=historico_colab_eventos,
+        )
+
+        if erro_pdf:
+            st.warning(erro_pdf)
+        elif pdf_bytes:
+            nome_arquivo = f"historico_sst_{matricula_colab or nome_colab.replace(' ', '_').lower()}.pdf"
+            st.download_button(
+                label="🖨️ Imprimir / Baixar Histórico em PDF (Com Logo)",
+                data=pdf_bytes,
+                file_name=nome_arquivo,
+                mime="application/pdf",
+                type="primary",
+                key=f"btn_pdf_colab_{colab_id}",
+            )
+
+        if historico_colab_eventos:
+            st.dataframe(pd.DataFrame(historico_colab_eventos), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhuma troca ou realização registrada para este colaborador até o momento.")
+
+    # ABA 3: RELATÓRIO POR PERÍODO
+    with tab3:
         st.subheader("🗓️ Consulta Geral de Movimentações por Período")
         p1, p2, p3 = st.columns([2, 2, 2])
         with p1:
