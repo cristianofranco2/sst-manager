@@ -74,6 +74,10 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
+def _normalizar_campo(valor: str) -> str:
+    return " ".join(str(valor or "").strip().lower().split())
+
+
 def _obter_ca(item: dict, epi_ref: dict) -> str:
     return str(
         item.get("ca")
@@ -87,13 +91,65 @@ def _obter_ca(item: dict, epi_ref: dict) -> str:
 
 
 def _obter_validade(item: dict, epi_ref: dict) -> date | None:
-    return _parse_data(
+    dt_val = _parse_data(
         item.get("data_validade")
         or item.get("data_validade_lote")
         or item.get("validade_lote")
         or epi_ref.get("data_validade_ca")
         or epi_ref.get("validade_ca")
         or epi_ref.get("data_validade")
+    )
+    if not dt_val and item.get("observacoes"):
+        obs_str = str(item.get("observacoes"))
+        if "Val. Lote:" in obs_str:
+            trecho = obs_str.split("Val. Lote:", 1)[1][:10]
+            dt_val = _parse_data(trecho)
+    return dt_val
+
+
+def _construir_tabela_saldos(inventario: list[dict], mapa_epis: dict[str, dict]) -> pd.DataFrame:
+    """
+    Agrupa e soma o saldo apenas quando SKU, CA e Validade forem iguais
+    (itens com mesmo SKU mas CA ou Validade diferentes ficam em linhas distintas).
+    """
+    agrupado: dict[tuple[str, str, str], dict] = {}
+
+    for item in inventario:
+        eid = str(item.get("epi_id") or "").strip()
+        epi_ref = mapa_epis.get(eid, {})
+
+        sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or eid or "—").strip()
+        nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
+        ca = _obter_ca(item, epi_ref)
+
+        dt_val = _obter_validade(item, epi_ref)
+        validade_str = dt_val.strftime("%d/%m/%Y") if dt_val else "—"
+
+        chave_unica = (
+            _normalizar_campo(sku),
+            _normalizar_campo(ca),
+            validade_str,
+        )
+        qtd_disp = int(item.get("quantidade_disponivel") or 0)
+
+        if chave_unica not in agrupado:
+            agrupado[chave_unica] = {
+                "SKU": sku,
+                "EPI": nome_epi,
+                "CA": ca,
+                "Validade": validade_str,
+                "Saldo Disponível": 0,
+                "Qtd. Lotes": 0,
+            }
+
+        agrupado[chave_unica]["Saldo Disponível"] += qtd_disp
+        agrupado[chave_unica]["Qtd. Lotes"] += 1
+
+    if not agrupado:
+        return pd.DataFrame()
+
+    return pd.DataFrame(list(agrupado.values())).sort_values(
+        by=["SKU", "Validade", "CA"], ascending=[True, True, True]
     )
 
 
@@ -124,12 +180,20 @@ def render_inventario() -> None:
     with tab1:
         col_t, col_b = st.columns([4, 1])
         with col_t:
-            st.subheader("Lotes Registrados no Inventário")
+            st.subheader("📊 Saldo Consolidado por EPI (SKU, CA e Validade)")
         with col_b:
             if st.button("🔄 Atualizar", key="btn_att_inv_tab1", use_container_width=True):
                 _limpar_cache_inventario()
                 st.rerun()
 
+        df_saldos_tab1 = _construir_tabela_saldos(inventario, mapa_epis)
+        if not df_saldos_tab1.empty:
+            st.dataframe(df_saldos_tab1, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum saldo registrado no inventário.")
+
+        st.markdown("---")
+        st.subheader("Lotes Registrados no Inventário")
         if inventario:
             linhas_lotes = []
             for item in inventario:
@@ -233,44 +297,9 @@ def render_inventario() -> None:
         st.markdown("---")
         st.subheader("📊 Saldo Atual por EPI (SKU, CA e Validade)")
 
-        agrupado_saldo: dict[tuple[str, str, str], dict] = {}
-        for item in inventario:
-            eid = str(item.get("epi_id") or "").strip()
-            epi_ref = mapa_epis.get(eid, {})
-
-            sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or eid or "—").strip()
-            nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-            ca = _obter_ca(item, epi_ref)
-
-            dt_val = _obter_validade(item, epi_ref)
-            if not dt_val and item.get("observacoes"):
-                obs_str = str(item.get("observacoes"))
-                if "Val. Lote:" in obs_str:
-                    trecho = obs_str.split("Val. Lote:", 1)[1][:10]
-                    dt_val = _parse_data(trecho)
-            validade_str = dt_val.strftime("%d/%m/%Y") if dt_val else "—"
-
-            chave_unica = (sku, ca, validade_str)
-            qtd_disp = int(item.get("quantidade_disponivel") or 0)
-
-            if chave_unica not in agrupado_saldo:
-                agrupado_saldo[chave_unica] = {
-                    "SKU": sku,
-                    "EPI": nome_epi,
-                    "CA": ca,
-                    "Validade": validade_str,
-                    "Saldo Disponível": 0,
-                    "Qtd. Lotes": 0,
-                }
-
-            agrupado_saldo[chave_unica]["Saldo Disponível"] += qtd_disp
-            agrupado_saldo[chave_unica]["Qtd. Lotes"] += 1
-
-        if agrupado_saldo:
-            df_saldos = pd.DataFrame(list(agrupado_saldo.values())).sort_values(
-                by=["SKU", "Validade", "CA"], ascending=[True, True, True]
-            )
-            st.dataframe(df_saldos, use_container_width=True, hide_index=True)
+        df_saldos_tab2 = _construir_tabela_saldos(inventario, mapa_epis)
+        if not df_saldos_tab2.empty:
+            st.dataframe(df_saldos_tab2, use_container_width=True, hide_index=True)
         else:
             st.info("Nenhum saldo registrado no inventário até o momento.")
 
