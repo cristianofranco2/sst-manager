@@ -1,38 +1,119 @@
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+import math
 from PIL import Image as PILImage, ImageDraw, ImageFont
 import streamlit as st
 
 
-def _gerar_logo_padrao_bytes() -> bytes:
-    """Gera um PNG limpo com a marca GLOBEX MULTIMODAL caso o ficheiro externo não exista."""
-    img = PILImage.new("RGB", (640, 220), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
-    fonte_grande = ImageFont.load_default(size=54)
-    fonte_sub = ImageFont.load_default(size=28)
-
-    draw.text((28, 48), "GLOBEX", fill=(11, 57, 84), font=fonte_grande)
-    draw.text((135, 118), "MULTIMODAL", fill=(24, 68, 94), font=fonte_sub)
-
-    azul = (0, 168, 224)
-    vermelho = (206, 24, 54)
-
-    pts_azul = [(475, 65), (525, 38), (575, 65), (575, 135), (525, 162), (475, 135)]
-    draw.polygon(pts_azul, outline=azul, width=9)
-
-    pts_vermelho = [
-        (515, 32),
-        (555, 12),
-        (598, 36),
-        (598, 122),
-        (578, 132),
-        (578, 48),
-        (552, 33),
-        (522, 49),
+def _carregar_fonte(tamanho: int, negrito: bool = False):
+    candidatas_fontes = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if negrito else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if negrito else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "DejaVuSans-Bold.ttf" if negrito else "DejaVuSans.ttf",
     ]
-    draw.polygon(pts_vermelho, fill=vermelho)
+    for caminho_fonte in candidatas_fontes:
+        if Path(caminho_fonte).exists():
+            try:
+                return ImageFont.truetype(caminho_fonte, size=tamanho)
+            except Exception:
+                pass
+    try:
+        return ImageFont.load_default(size=tamanho)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _vertices_hexagono(cx: float, cy: float, raio: float) -> list[tuple[float, float]]:
+    """Retorna os 6 vértices de um hexágono com topo/base planos (flat-top)."""
+    pts = []
+    for i in range(6):
+        ang = math.radians(60 * i)
+        pts.append((cx + raio * math.cos(ang), cy + raio * math.sin(ang)))
+    return pts
+
+
+def _gerar_logo_padrao_bytes() -> bytes:
+    """
+    Gera um PNG fiel à identidade visual GLOBEX MULTIMODAL caso o arquivo
+    de imagem não esteja presente no ambiente de execução.
+    """
+    largura, altura = 1200, 420
+    img = PILImage.new("RGBA", (largura, altura), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    cor_texto = (10, 58, 78, 255)      # Azul-petróleo escuro
+    cor_azul = (0, 169, 224, 255)      # Ciano / azul vibrante do hexágono
+    cor_vermelho = (204, 20, 56, 255)  # Vermelho da faixa lateral
+
+    fonte_globex = _carregar_fonte(tamanho=118, negrito=True)
+    fonte_sub = _carregar_fonte(tamanho=56, negrito=False)
+
+    x_texto = 95
+    y_globex = 115
+    draw.text((x_texto, y_globex), "GLOBEX", fill=cor_texto, font=fonte_globex)
+
+    bbox_globex = draw.textbbox((x_texto, y_globex), "GLOBEX", font=fonte_globex)
+    # Posiciona "MULTIMODAL" alinhado à direita, abaixo da porção final de "GLOBEX"
+    bbox_sub = draw.textbbox((0, 0), "MULTIMODAL", font=fonte_sub)
+    larg_sub = bbox_sub[2] - bbox_sub[0]
+    x_sub = bbox_globex[2] - larg_sub - 6
+    y_sub = bbox_globex[3] + 18
+    draw.text((x_sub, y_sub), "MULTIMODAL", fill=cor_texto, font=fonte_sub)
+
+    # Emblema geométrico à direita
+    cx_hex = 915.0
+    cy_hex = 210.0
+    raio_ext = 118.0
+    raio_int = 84.0
+
+    hex_ext = _vertices_hexagono(cx_hex, cy_hex, raio_ext)
+    hex_int = _vertices_hexagono(cx_hex, cy_hex, raio_int)
+
+    # Anel azul vazado (polígono externo menos interno)
+    anel_azul = PILImage.new("RGBA", (largura, altura), (0, 0, 0, 0))
+    draw_azul = ImageDraw.Draw(anel_azul, "RGBA")
+    draw_azul.polygon(hex_ext, fill=cor_azul)
+    draw_azul.polygon(hex_int, fill=(0, 0, 0, 0))
+    # Usa máscara para recortar o miolo com transparência real
+    mascara = PILImage.new("L", (largura, altura), 0)
+    draw_mask = ImageDraw.Draw(mascara)
+    draw_mask.polygon(hex_ext, fill=255)
+    draw_mask.polygon(hex_int, fill=0)
+
+    camada_azul = PILImage.new("RGBA", (largura, altura), cor_azul)
+    img = PILImage.alpha_composite(img, PILImage.composite(camada_azul, PILImage.new("RGBA", (largura, altura), (0, 0, 0, 0)), mascara))
+
+    # Faixa vermelha deslocada à direita/cima (lados superior-direito e inferior-direito)
+    dx = 54.0
+    dy = -26.0
+    esp = 28.0
+    p_top_r = (hex_ext[5][0] + dx, hex_ext[5][1] + dy)
+    p_right = (hex_ext[0][0] + dx, hex_ext[0][1] + dy)
+    p_bot_r = (hex_ext[1][0] + dx, hex_ext[1][1] + dy)
+
+    # Constrói faixa grossa acompanhando os dois segmentos direitos
+    faixa_vermelha = [
+        (p_top_r[0] - esp * 0.4, p_top_r[1] - esp * 0.7),
+        (p_right[0] + esp * 0.85, p_right[1] - esp * 0.3),
+        (p_bot_r[0] - esp * 0.4, p_bot_r[1] + esp * 0.7),
+        (p_bot_r[0] - esp * 1.35, p_bot_r[1] - esp * 0.2),
+        (p_right[0] - esp * 0.35, p_right[1]),
+        (p_top_r[0] - esp * 1.35, p_top_r[1] + esp * 0.2),
+    ]
+    draw = ImageDraw.Draw(img, "RGBA")
+    draw.polygon(faixa_vermelha, fill=cor_vermelho)
+
+    # Recorta margem transparente excedente
+    bbox = img.getbbox()
+    if bbox:
+        pad = 24
+        img = img.crop((
+            max(0, bbox[0] - pad),
+            max(0, bbox[1] - pad),
+            min(largura, bbox[2] + pad),
+            min(altura, bbox[3] + pad),
+        ))
 
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -40,12 +121,24 @@ def _gerar_logo_padrao_bytes() -> bytes:
 
 
 def obter_logo_bytes() -> bytes:
+    """
+    Busca o arquivo de logotipo oficial no repositório antes de recorrer ao desenho padrão.
+    """
+    base_dir = Path(__file__).resolve().parent
     candidatos = [
+        Path("Logo_2.png"),
+        Path("logo_2.png"),
+        Path("assets/Logo_2.png"),
+        Path("assets/logo_2.png"),
         Path("assets/logo.png"),
         Path("assets/Logo.png"),
         Path("Logo.png"),
         Path("logo.png"),
         Path("modules/assets/logo.png"),
+        base_dir / "Logo_2.png",
+        base_dir / "logo_2.png",
+        base_dir / "assets" / "logo.png",
+        base_dir / "logo.png",
     ]
     for caminho in candidatos:
         if caminho.exists() and caminho.is_file():
@@ -63,7 +156,7 @@ def render_logo_sidebar() -> None:
 
 
 def render_cabecalho_modulo(titulo: str, subtitulo: str = "") -> None:
-    col_esq, col_dir = st.columns([4.5, 1.5])
+    col_esq, col_dir = st.columns([4.4, 1.6])
     with col_esq:
         st.title(titulo)
         if subtitulo:
@@ -79,7 +172,7 @@ def gerar_pdf_historico_colaborador(
     """
     Gera um PDF de auditoria/fiscalização com as datas em que as trocas de EPI
     foram realizadas e as datas em que exames e treinamentos foram renovados,
-    incluindo o logótipo da empresa e datas no formato dd/mm/aaaa.
+    incluindo o logotipo da empresa e datas no formato dd/mm/aaaa.
     """
     try:
         from reportlab.lib import colors
@@ -127,7 +220,7 @@ def gerar_pdf_historico_colaborador(
     elementos = []
 
     logo_bytes = obter_logo_bytes()
-    img = RLImage(BytesIO(logo_bytes), width=4.5 * cm, height=1.8 * cm, kind="proportional")
+    img = RLImage(BytesIO(logo_bytes), width=4.8 * cm, height=1.7 * cm, kind="proportional")
 
     texto_cab = Paragraph(
         "<b>GLOBEX MULTIMODAL</b><br/>"
@@ -135,7 +228,7 @@ def gerar_pdf_historico_colaborador(
         f"<font size=8 color='#555555'>Emitido em: {date.today().strftime('%d/%m/%Y')} às {datetime.now().strftime('%H:%M')}</font>",
         estilo_sub,
     )
-    tabela_topo = Table([[img, texto_cab]], colWidths=[5.0 * cm, 13.0 * cm])
+    tabela_topo = Table([[img, texto_cab]], colWidths=[5.2 * cm, 12.8 * cm])
     tabela_topo.setStyle(
         TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
