@@ -294,4 +294,54 @@ def gerar_pdf_historico_colaborador(
             "Status",
             str(colab.get("status") or "Ativo"),
             "Admissão",
-            str(colab.get("data_admissao_
+            str(colab.get("data_admissao_br") or "—"),
+        ],
+    ]
+    t_colab = Table(dados_colab, colWidths=[3.5 * cm, 6.0 * cm, 3.0 * cm, 5.5 * cm])
+    t_colab.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#EDF2F7")),
+            ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#EDF2F7")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("PADDING", (0, 0), (-1, -1), 5),
+        ])
+    )
+    elementos.append(t_colab)
+
+    elementos.append(Paragraph("Registro de Trocas Realizadas e Renovações Efetuadas", estilo_secao))
+    if not movimentacoes_realizadas:
+        elementos.append(
+            Paragraph("Nenhuma troca de EPI ou renovação registrada para este colaborador.", estilo_sub)
+        )
+    else:
+        cabecalhos = ["Data Realização", "Tipo de Registro", "Item", "Detalhes / Observações"]
+        linhas = [
+            [
+                str(m.get("Data Realização") or "—"),
+                str(m.get("Tipo de Registro") or "—"),
+                str(m.get("Item") or "—"),
+                str(m.get("Detalhes / Observações") or "—"),
+            ]
+            for m in movimentacoes_realizadas
+        ]
+        tab_mov = Table(
+            [cabecalhos] + linhas,
+            colWidths=[2.8 * cm, 4.2 * cm, 5.5 * cm, 5.5 * cm],
+            repeatRows=1,
+        )
+        tab_mov.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0B3954")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7FAFC")]),
+                ("PADDING", (0, 0), (-1, -1), 5),
+            ])
+        )
+        elementos.append(tab_mov)
+
+    doc.build(elementos)
+    return buffer.getvalue(), None
