@@ -113,7 +113,6 @@ def _filtrar_vinculos(
         bate_colab = bool(colab_id and v_colab and v_colab == colab_id)
         bate_cargo = _bate_com_cargo_ou_funcao(v, cargo_id, nome_funcao)
 
-        # Se a tabela de vínculo não tem nem colaborador_id nem cargo/função, ignora
         if not bate_colab and not bate_cargo:
             continue
 
@@ -124,17 +123,17 @@ def _filtrar_vinculos(
                 item_ref = mapa_itens[iid]
                 break
 
-        resultados.append({**item_ref, **v, "_item_ref": item_ref})
+        resultados.append({**item_ref, **v})
 
     return resultados
 
 
-def render_relatorios() -> None:
+def render_relatorio_colaborador() -> None:
     render_cabecalho_modulo("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
     col_f, col_btn = st.columns([5, 1])
     with col_btn:
-        if st.button("🔄 Atualizar", key="btn_att_relatorio", use_container_width=True):
+        if st.button("🔄 Atualizar", key="btn_att_relatorio_colab", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
@@ -148,7 +147,6 @@ def render_relatorios() -> None:
     exames = _buscar_tabela("exames")
     treinamentos = _buscar_tabela("treinamentos")
 
-    # Tenta buscar tabelas de vínculo/requisitos/entregas existentes no banco
     vinculos_epi = (
         _buscar_tabela("cargo_epis")
         or _buscar_tabela("funcao_epis")
@@ -271,3 +269,6 @@ def render_relatorios() -> None:
 
     with tab3:
         st.info("Filtre vencimentos e pendências por intervalo de datas.")
+
+
+render_relatorios = render_relatorio_colaborador
