@@ -6,7 +6,7 @@ import streamlit as st
 
 
 def _gerar_logo_padrao_bytes() -> bytes:
-    """Gera um PNG limpo com a marca GLOBEX MULTIMODAL caso o arquivo externo não exista."""
+    """Gera um PNG limpo com a marca GLOBEX MULTIMODAL caso o ficheiro externo não exista."""
     img = PILImage.new("RGB", (640, 220), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
@@ -79,7 +79,7 @@ def gerar_pdf_historico_colaborador(
     """
     Gera um PDF de auditoria/fiscalização com as datas em que as trocas de EPI
     foram realizadas e as datas em que exames e treinamentos foram renovados,
-    incluindo logótipo da empresa e datas no formato dd/mm/aaaa.
+    incluindo o logótipo da empresa e datas no formato dd/mm/aaaa.
     """
     try:
         from reportlab.lib import colors
@@ -95,7 +95,7 @@ def gerar_pdf_historico_colaborador(
             TableStyle,
         )
     except ImportError:
-        return None, "Biblioteca 'reportlab' não instalada. Adicione 'reportlab' ao requirements.txt."
+        return None, "Biblioteca 'reportlab' não instalada. Adicione 'reportlab' ao requirements.txt e faça reboot na app."
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
