@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -31,7 +32,7 @@ def _formatar_data_br(valor) -> str:
 
 
 def render_treinamentos() -> None:
-    st.title("🎓 Cadastro de Treinamentos")
+    render_cabecalho_modulo("🎓 Cadastro de Treinamentos")
 
     try:
         supabase = get_supabase()
