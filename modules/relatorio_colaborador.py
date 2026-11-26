@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import ast
 import io
 import json
@@ -11,7 +11,7 @@ from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=10, show_spinner=False)
 def _buscar_tabela(nome_tabela: str) -> list[dict]:
     supabase = get_supabase()
     try:
@@ -27,6 +27,16 @@ def _limpar_cache() -> None:
 
 def _normalizar(valor) -> str:
     return " ".join(str(valor or "").strip().lower().split())
+
+
+def _para_maiusculo(valor):
+    if isinstance(valor, str):
+        return valor.strip().upper()
+    if isinstance(valor, list):
+        return [_para_maiusculo(item) for item in valor]
+    if isinstance(valor, dict):
+        return {k: _para_maiusculo(v) for k, v in valor.items()}
+    return valor
 
 
 def _parse_data(valor) -> date | None:
@@ -53,13 +63,27 @@ def _formatar_data_br(valor) -> str:
 
 
 def _indicador_vencimento(data_venc_raw, hoje: date | None = None) -> tuple[str, str]:
+    """
+    Regras de bolinhas:
+    - 🔴 Vencido: dt_venc < hoje
+    - 🟠 Vence em até 10 dias: 0 <= (dt_venc - hoje).days <= 10
+    - 🟡 Vence em até 30 dias: 10 < (dt_venc - hoje).days <= 30
+    - 🟢 Em dia: (dt_venc - hoje).days > 30
+    - ⚪ Sem vencimento: quando não há data de vencimento
+    """
     ref_hoje = hoje or date.today()
     dt_venc = _parse_data(data_venc_raw)
     if dt_venc is None:
-        return "🟡", "Sem data"
-    if dt_venc < ref_hoje:
-        return "🔴", "Vencido"
-    return "🟢", "Em dia"
+        return "⚪", "SEM VENCIMENTO"
+
+    dias_restantes = (dt_venc - ref_hoje).days
+    if dias_restantes < 0:
+        return "🔴", f"VENCIDO ({abs(dias_restantes)}D)"
+    if dias_restantes <= 10:
+        return "🟠", f"VENCE EM {dias_restantes}D"
+    if dias_restantes <= 30:
+        return "🟡", f"VENCE EM {dias_restantes}D"
+    return "🟢", "EM DIA"
 
 
 def _somar_meses(data_base: date, meses: int) -> date:
@@ -86,8 +110,8 @@ def _extrair_coluna_pgrst204(msg: str) -> str | None:
 
 
 def _executar_insert_fallback(supabase, tabela: str, payload: dict, obrigatorias: set[str]):
-    dados = dict(payload)
-    for _ in range(15):
+    dados = _para_maiusculo(dict(payload))
+    for _ in range(20):
         try:
             return supabase.table(tabela).insert(dados).execute()
         except Exception as e:
@@ -149,6 +173,8 @@ def _extrair_mapa_referencias(valor) -> dict[str, int | None]:
                     or item.get("tipo_exame_id")
                     or item.get("treinamento_id")
                     or item.get("nome")
+                    or item.get("nome_treinamento")
+                    or item.get("titulo")
                     or item.get("descricao")
                     or ""
                 ).strip()
@@ -182,8 +208,12 @@ def _extrair_mapa_referencias(valor) -> dict[str, int | None]:
     return resultado
 
 
-def _resolver_funcao_colaborador(colab: dict, funcoes: list[dict]) -> tuple[str | None, str]:
-    funcao_id = str(colab.get("funcao_id") or colab.get("cargo_id") or "").strip()
+def _resolver_funcao_colaborador(
+    colab: dict, funcoes: list[dict], cargos: list[dict]
+) -> tuple[str | None, str]:
+    funcao_id = str(
+        colab.get("funcao_id") or colab.get("cargo_id") or ""
+    ).strip()
     nome_direto = str(
         colab.get("funcao")
         or colab.get("funcao_nome")
@@ -192,32 +222,38 @@ def _resolver_funcao_colaborador(colab: dict, funcoes: list[dict]) -> tuple[str 
         or ""
     ).strip()
 
+    origens_cargo = list(funcoes) + list(cargos)
+
     if funcao_id:
-        for f in funcoes:
+        for f in origens_cargo:
             if str(f.get("id") or "").strip() == funcao_id:
                 nome_f = str(
                     f.get("nome")
                     or f.get("nome_funcao")
+                    or f.get("nome_cargo")
                     or f.get("funcao")
+                    or f.get("cargo")
                     or f.get("titulo")
                     or nome_direto
                     or "—"
-                ).strip()
+                ).strip().upper()
                 return funcao_id, nome_f
 
     if nome_direto:
-        for f in funcoes:
+        for f in origens_cargo:
             nome_f = str(
                 f.get("nome")
                 or f.get("nome_funcao")
+                or f.get("nome_cargo")
                 or f.get("funcao")
+                or f.get("cargo")
                 or f.get("titulo")
                 or ""
             ).strip()
             if _normalizar(nome_f) == _normalizar(nome_direto):
                 fid = str(f.get("id") or "").strip() or None
-                return fid, nome_f
-        return None, nome_direto
+                return fid, nome_f.upper()
+        return None, nome_direto.upper()
 
     return None, "—"
 
@@ -232,7 +268,7 @@ def _obter_requisito_funcao(
     if nome_funcao and nome_funcao != "—":
         alvo = _normalizar(nome_funcao)
         for req in requisitos:
-            for chave in ("funcao", "funcao_nome", "nome_funcao", "cargo", "nome"):
+            for chave in ("funcao", "funcao_nome", "nome_funcao", "cargo", "nome_cargo", "nome"):
                 if _normalizar(req.get(chave)) == alvo:
                     return req
     return None
@@ -288,7 +324,7 @@ def _resolver_itens_catalogo(
             chave = _normalizar(ref)
             if chave and chave not in vistos:
                 vistos.add(chave)
-                resolvidos.append({"nome": ref, "descricao": ref, "_qtd_requisito": qtd})
+                resolvidos.append({"nome": ref.upper(), "descricao": ref.upper(), "_qtd_requisito": qtd})
 
     return resolvidos
 
@@ -297,16 +333,29 @@ def _nome_exame(reg: dict) -> str:
     for c in ("nome", "nome_exame", "tipo_exame", "titulo", "descricao"):
         v = str(reg.get(c) or "").strip()
         if v:
-            return v
+            return v.upper()
     return "—"
 
 
 def _nome_treinamento(reg: dict) -> str:
-    for c in ("nome", "nome_treinamento", "titulo", "curso", "descricao"):
+    for c in ("nome_treinamento", "nome", "titulo", "curso", "tipo_treinamento", "descricao"):
         v = str(reg.get(c) or "").strip()
         if v:
-            return v
+            return v.upper()
     return "—"
+
+
+def _durabilidade_dias_epi(epi: dict) -> int:
+    for campo in ("durabilidade_dias", "durabilidade", "validade_dias", "dias_durabilidade"):
+        val = epi.get(campo)
+        if val is not None and str(val).strip() != "":
+            try:
+                dias = int(float(val))
+                if dias > 0:
+                    return dias
+            except Exception:
+                continue
+    return 180
 
 
 def _latin1(texto: str) -> str:
@@ -335,10 +384,6 @@ def _quebrar_linhas(texto: str, max_chars: int) -> list[str]:
 
 
 def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict]) -> bytes:
-    """
-    Gera PDF no padrão Comprovante de Auditoria / Fiscalização (GLOBEX MULTIMODAL)
-    com grade de dados do colaborador e tabela de registros efetuados.
-    """
     try:
         agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
     except Exception:
@@ -350,18 +395,15 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
     margin_x = 36.0
     usable_w = page_w - 2 * margin_x
 
-    # Monta blocos visuais de cada página (lista de comandos PDF)
     paginas_cmds: list[list[str]] = []
 
     def nova_pagina() -> tuple[list[str], float]:
         cmds: list[str] = []
-        # Cabeçalho superior empresa
         cmds.append("0.07 0.22 0.45 rg")
         cmds.append(f"BT /F2 13 Tf {margin_x:.1f} {page_h - 46:.1f} Td ({_escapar_pdf('GLOBEX')}) Tj ET")
         cmds.append("0.20 0.45 0.75 rg")
         cmds.append(f"BT /F2 8 Tf {margin_x:.1f} {page_h - 57:.1f} Td ({_escapar_pdf('MULTIMODAL')}) Tj ET")
 
-        # Título principal
         cmds.append("0.10 0.14 0.20 rg")
         cmds.append(
             f"BT /F2 12 Tf {margin_x:.1f} {page_h - 80:.1f} Td "
@@ -372,20 +414,17 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
             f"({_escapar_pdf('(Auditoria / Fiscalização)')}) Tj ET"
         )
 
-        # Linha de emissão
         cmds.append("0.40 0.44 0.50 rg")
         cmds.append(
             f"BT /F1 8.5 Tf {margin_x:.1f} {page_h - 112:.1f} Td "
             f"({_escapar_pdf(f'Emitido em: {emitido_em}')}) Tj ET"
         )
 
-        # Divisor
         cmds.append("0.78 0.82 0.87 RG 0.8 w")
         cmds.append(f"{margin_x:.1f} {page_h - 120:.1f} m {page_w - margin_x:.1f} {page_h - 120:.1f} l S")
 
         y_cursor = page_h - 140.0
 
-        # Seção Dados do Colaborador
         cmds.append("0.10 0.14 0.20 rg")
         cmds.append(
             f"BT /F2 10 Tf {margin_x:.1f} {y_cursor:.1f} Td ({_escapar_pdf('Dados do Colaborador')}) Tj ET"
@@ -402,19 +441,16 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
         for r_idx, (l1, v1, l2, v2) in enumerate(grid_rows):
             top_y = y_cursor - r_idx * row_h
             bot_y = top_y - row_h
-            # Fundo cinza claro nas células de rótulo
             cmds.append("0.95 0.96 0.98 rg")
             cmds.append(f"{margin_x:.1f} {bot_y:.1f} {col_w:.1f} {row_h:.1f} re f")
             cmds.append(f"{margin_x + 2*col_w:.1f} {bot_y:.1f} {col_w:.1f} {row_h:.1f} re f")
 
-            # Bordas
             cmds.append("0.80 0.83 0.88 RG 0.6 w")
             cmds.append(f"{margin_x:.1f} {bot_y:.1f} {usable_w:.1f} {row_h:.1f} re S")
             for c_i in (1, 2, 3):
                 x_div = margin_x + c_i * col_w
                 cmds.append(f"{x_div:.1f} {bot_y:.1f} m {x_div:.1f} {top_y:.1f} l S")
 
-            # Textos
             cmds.append("0.25 0.29 0.35 rg")
             cmds.append(f"BT /F2 8 Tf {margin_x + 5:.1f} {bot_y + 7:.1f} Td ({_escapar_pdf(l1)}) Tj ET")
             cmds.append(f"BT /F2 8 Tf {margin_x + 2*col_w + 5:.1f} {bot_y + 7:.1f} Td ({_escapar_pdf(l2)}) Tj ET")
@@ -425,7 +461,6 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
 
         y_cursor = y_cursor - len(grid_rows) * row_h - 22.0
 
-        # Título tabela de registros
         cmds.append("0.10 0.14 0.20 rg")
         cmds.append(
             f"BT /F2 10 Tf {margin_x:.1f} {y_cursor:.1f} Td "
@@ -434,7 +469,6 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
         y_cursor -= 12.0
         return cmds, y_cursor
 
-    # Larguras das 4 colunas da tabela (soma = usable_w = 523.0)
     w_data = 82.0
     w_tipo = 135.0
     w_item = 130.0
@@ -464,16 +498,12 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
     y_cur = desenhar_cabecalho_tabela(cmds_atual, y_cur)
 
     for item in linhas_historico:
-        dt_real = str(item.get("Data") or "—").strip()
-        tipo_reg = str(item.get("Tipo") or "—").strip()
-        nome_item = str(item.get("Item") or "—").strip()
-        detalhes = str(item.get("Detalhes") or item.get("Status") or "—").strip()
-        detalhes = (
-            detalhes.replace("🟢", "")
-            .replace("🔴", "")
-            .replace("🟡", "")
-            .strip()
-        )
+        dt_real = str(item.get("Data") or "—").strip().upper()
+        tipo_reg = str(item.get("Tipo") or "—").strip().upper()
+        nome_item = str(item.get("Item") or "—").strip().upper()
+        detalhes = str(item.get("Detalhes") or item.get("Status") or "—").strip().upper()
+        for emoji in ("🟢", "🟠", "🟡", "🔴", "⚪"):
+            detalhes = detalhes.replace(emoji, "").strip()
 
         l_data = _quebrar_linhas(dt_real, 13)
         l_tipo = _quebrar_linhas(tipo_reg, 24)
@@ -508,10 +538,8 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
 
     paginas_cmds.append(cmds_atual)
 
-    # Monta estrutura PDF 1.4
     objetos: list[bytes] = []
     num_pag = len(paginas_cmds)
-    # 1: Catalog, 2: Pages, 3: Helvetica, 4: Helvetica-Bold
     page_ids = [5 + i * 2 for i in range(num_pag)]
     content_ids = [5 + i * 2 + 1 for i in range(num_pag)]
 
@@ -585,10 +613,11 @@ def render_relatorio_colaborador() -> None:
 
     colaboradores = _buscar_tabela("colaboradores")
     if not colaboradores:
-        st.info("Nenhum colaborador cadastrado.")
+        st.info("NENHUM COLABORADOR CADASTRADO.")
         return
 
     funcoes = _buscar_tabela("funcoes")
+    cargos = _buscar_tabela("cargos")
     funcao_requisitos = _buscar_tabela("funcao_requisitos")
     epis = _buscar_tabela("epis")
     inventario = _buscar_tabela("inventario_epi")
@@ -604,10 +633,10 @@ def render_relatorio_colaborador() -> None:
         if not cid:
             continue
         mapa_colabs[cid] = c
-        _, nome_func = _resolver_funcao_colaborador(c, funcoes)
-        matricula = str(c.get("matricula") or "—").strip()
-        status = str(c.get("status") or "Ativo").strip()
-        nome_c = str(c.get("nome_completo") or c.get("nome") or "Colaborador").strip()
+        _, nome_func = _resolver_funcao_colaborador(c, funcoes, cargos)
+        matricula = str(c.get("matricula") or "—").strip().upper()
+        status = str(c.get("status") or "ATIVO").strip().upper()
+        nome_c = str(c.get("nome_completo") or c.get("nome") or "COLABORADOR").strip().upper()
         rotulos.append((cid, f"{nome_c} ({matricula}) — {nome_func} [{status}]"))
 
     with col_f:
@@ -619,16 +648,16 @@ def render_relatorio_colaborador() -> None:
         )
 
     colab_atual = mapa_colabs.get(colab_sel_id, {})
-    funcao_id, nome_funcao = _resolver_funcao_colaborador(colab_atual, funcoes)
-    matricula = str(colab_atual.get("matricula") or "—").strip()
+    funcao_id, nome_funcao = _resolver_funcao_colaborador(colab_atual, funcoes, cargos)
+    matricula = str(colab_atual.get("matricula") or "—").strip().upper()
     setor = str(
         colab_atual.get("setor")
         or colab_atual.get("centro_custo")
         or colab_atual.get("departamento")
         or "—"
-    ).strip()
-    status = str(colab_atual.get("status") or "Ativo").strip()
-    nome_colab = str(colab_atual.get("nome_completo") or colab_atual.get("nome") or "—").strip()
+    ).strip().upper()
+    status = str(colab_atual.get("status") or "ATIVO").strip().upper()
+    nome_colab = str(colab_atual.get("nome_completo") or colab_atual.get("nome") or "—").strip().upper()
     admissao_str = _formatar_data_br(
         colab_atual.get("data_admissao") or colab_atual.get("admissao") or colab_atual.get("created_at")
     )
@@ -658,16 +687,20 @@ def render_relatorio_colaborador() -> None:
     ]
     for t in trocas_do_colab:
         ep = mapa_epis.get(str(t.get("epi_id") or "").strip(), {})
-        nome_e = str(ep.get("descricao") or ep.get("nome_epi") or ep.get("nome") or "EPI").strip()
-        dt_t = _formatar_data_br(t.get("data_troca") or t.get("data_entrega") or t.get("created_at"))
-        obs_t = str(t.get("motivo") or t.get("observacoes") or "").strip()
-        det_t = f"Qtd: {t.get('quantidade') or 1}" + (f" — {obs_t}" if obs_t else "")
+        nome_e = str(ep.get("descricao") or ep.get("nome_epi") or ep.get("nome") or "EPI").strip().upper()
+        dt_entrega_raw = t.get("data_entrega") or t.get("data_troca") or t.get("created_at")
+        dt_entrega = _parse_data(dt_entrega_raw)
+        dur_dias = _durabilidade_dias_epi(ep)
+        dt_venc_epi = (dt_entrega + timedelta(days=dur_dias)) if dt_entrega else None
+        bol_epi, rot_epi = _indicador_vencimento(dt_venc_epi)
+        obs_t = str(t.get("motivo") or t.get("observacoes") or "").strip().upper()
+        det_t = f"QTD: {t.get('quantidade') or 1} | DUR.: {dur_dias}D" + (f" — {obs_t}" if obs_t else "")
         historico_itens.append({
-            "Tipo": "Troca de EPI",
+            "Tipo": "TROCA DE EPI",
             "Item": nome_e,
-            "Data": dt_t,
-            "Vencimento": _formatar_data_br(ep.get("data_validade_ca") or ep.get("validade_ca")),
-            "Status": "🟢 Registrado",
+            "Data": _formatar_data_br(dt_entrega),
+            "Vencimento": _formatar_data_br(dt_venc_epi),
+            "Status": f"{bol_epi} {rot_epi}",
             "Detalhes": det_t,
         })
 
@@ -679,16 +712,16 @@ def render_relatorio_colaborador() -> None:
         tx_info = mapa_tipos_ex.get(tx_id, {})
         nome_ex = _nome_exame({**tx_info, **ex})
         venc_raw = ex.get("data_vencimento") or ex.get("proximo_vencimento") or ex.get("validade")
-        bol, _ = _indicador_vencimento(venc_raw)
-        det_ex = str(ex.get("observacoes") or ex.get("resultado") or "").strip()
+        bol, rot = _indicador_vencimento(venc_raw)
+        det_ex = str(ex.get("observacoes") or ex.get("resultado") or "").strip().upper()
         if not det_ex:
-            det_ex = f"Exame realizado / renovado (Venc.: {_formatar_data_br(venc_raw)})"
+            det_ex = f"EXAME REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
         historico_itens.append({
-            "Tipo": "Renovação de Exame",
+            "Tipo": "RENOVAÇÃO DE EXAME",
             "Item": nome_ex,
             "Data": _formatar_data_br(ex.get("data_realizacao") or ex.get("data_exame") or ex.get("created_at")),
             "Vencimento": _formatar_data_br(venc_raw),
-            "Status": f"{bol} {str(ex.get('status') or 'Registrado').strip()}",
+            "Status": f"{bol} {rot}",
             "Detalhes": det_ex,
         })
 
@@ -698,16 +731,16 @@ def render_relatorio_colaborador() -> None:
     for tr in trein_do_colab:
         nome_tr = _nome_treinamento(tr)
         venc_raw = tr.get("data_vencimento") or tr.get("validade")
-        bol, _ = _indicador_vencimento(venc_raw)
-        det_tr = str(tr.get("observacoes") or tr.get("carga_horaria") or "").strip()
+        bol, rot = _indicador_vencimento(venc_raw)
+        det_tr = str(tr.get("observacoes") or tr.get("carga_horaria") or "").strip().upper()
         if not det_tr:
-            det_tr = f"Treinamento realizado / renovado (Venc.: {_formatar_data_br(venc_raw)})"
+            det_tr = f"TREINAMENTO REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
         historico_itens.append({
-            "Tipo": "Renovação de Treinamento",
+            "Tipo": "RENOVAÇÃO DE TREINAMENTO",
             "Item": nome_tr,
             "Data": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_conclusao") or tr.get("created_at")),
             "Vencimento": _formatar_data_br(venc_raw),
-            "Status": f"{bol} {str(tr.get('status') or 'Registrado').strip()}",
+            "Status": f"{bol} {rot}",
             "Detalhes": det_tr,
         })
 
@@ -718,6 +751,7 @@ def render_relatorio_colaborador() -> None:
     ])
 
     with tab1:
+        # ---------------- EPIs (vencimento pela data de entrega + durabilidade) ----------------
         st.subheader("🥽 EPIs")
         epis_req = _resolver_itens_catalogo(
             refs_epi, epis, ("descricao", "nome_epi", "codigo_sku", "numero_ca")
@@ -725,20 +759,39 @@ def render_relatorio_colaborador() -> None:
         if epis_req:
             for idx, e in enumerate(epis_req):
                 eid = str(e.get("id") or idx).strip()
-                sku_str = str(e.get("codigo_sku") or e.get("sku") or "—")
-                nome_epi_str = str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "—")
-                ca_str = str(e.get("numero_ca") or e.get("ca") or "—")
-                val_ca_raw = e.get("data_validade_ca") or e.get("validade_ca")
-                val_ca_str = _formatar_data_br(val_ca_raw)
-                bol_ca, rot_ca = _indicador_vencimento(val_ca_raw)
+                sku_str = str(e.get("codigo_sku") or e.get("sku") or "—").strip().upper()
+                nome_epi_str = str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "—").strip().upper()
+                ca_str = str(e.get("numero_ca") or e.get("ca") or "—").strip().upper()
+                dur_dias = _durabilidade_dias_epi(e)
+
+                # Busca última entrega/troca deste EPI para este colaborador
+                trocas_deste_epi = []
+                for t in trocas_do_colab:
+                    if str(t.get("epi_id") or "").strip() == str(e.get("id") or "").strip():
+                        dt_e = _parse_data(t.get("data_entrega") or t.get("data_troca") or t.get("created_at"))
+                        if dt_e:
+                            trocas_deste_epi.append((dt_e, t))
+                trocas_deste_epi.sort(key=lambda par: par[0], reverse=True)
+
+                if trocas_deste_epi:
+                    dt_entrega_ref, _ = trocas_deste_epi[0]
+                    dt_venc_epi = dt_entrega_ref + timedelta(days=dur_dias)
+                    bol_epi, rot_epi = _indicador_vencimento(dt_venc_epi)
+                    texto_venc_epi = f"{bol_epi} {_formatar_data_br(dt_venc_epi)} ({rot_epi})"
+                    texto_entrega_epi = _formatar_data_br(dt_entrega_ref)
+                else:
+                    bol_epi, rot_epi = _indicador_vencimento(None)
+                    texto_venc_epi = f"{bol_epi} SEM ENTREGA ({dur_dias}D)"
+                    texto_entrega_epi = "—"
+
                 qtd_req = e.get("_qtd_requisito")
 
                 with st.container(border=True):
-                    cols = st.columns([1.0, 2.3, 1.1, 2.1, 0.9, 1.3])
+                    cols = st.columns([1.0, 2.2, 1.0, 2.3, 1.2, 1.3])
                     cols[0].markdown(f"**SKU:**  \n{sku_str}")
                     cols[1].markdown(f"**EPI:**  \n{nome_epi_str}")
-                    cols[2].markdown(f"**CA:**  \n{ca_str}")
-                    cols[3].markdown(f"**Val. CA:**  \n{bol_ca} {val_ca_str} ({rot_ca})")
+                    cols[2].markdown(f"**CA / Dur.:**  \n{ca_str} ({dur_dias}D)")
+                    cols[3].markdown(f"**Venc. (Entrega: {texto_entrega_epi}):**  \n{texto_venc_epi}")
                     cols[4].markdown(f"**Qtd:**  \n{qtd_req if qtd_req is not None else '—'}")
 
                     chave_acao_epi = f"abrir_troca_epi_{colab_sel_id}_{eid}_{idx}"
@@ -753,16 +806,20 @@ def render_relatorio_colaborador() -> None:
                                     "Quantidade", min_value=1, value=max(1, int(qtd_req or 1)), step=1
                                 )
                             with f2:
-                                data_troca = st.date_input("Data da Troca", value=date.today(), format="DD/MM/YYYY")
+                                data_troca = st.date_input("Data da Entrega / Troca", value=date.today(), format="DD/MM/YYYY")
                             with f3:
-                                motivo_troca = st.text_input("Motivo / Obs.", placeholder="Ex: Troca periódica")
+                                motivo_troca = st.text_input("Motivo / Obs.", placeholder="EX: TROCA PERIÓDICA")
+                            novo_venc_prev = data_troca + timedelta(days=dur_dias)
+                            st.caption(
+                                f"Durabilidade do EPI: **{dur_dias} dias** — Próximo vencimento: **{novo_venc_prev.strftime('%d/%m/%Y')}**"
+                            )
                             if st.form_submit_button("✅ Confirmar Troca"):
                                 try:
                                     lote_id = None
                                     qtd_disp_lote = 0
                                     for inv in inventario:
                                         if str(inv.get("epi_id") or "").strip() == str(e.get("id") or "").strip():
-                                            disp = int(inv.get("quantidade_disponivel") or 0)
+                                            disp = int(inv.get("quantidade_disponivel") or inv.get("quantidade") or inv.get("saldo") or 0)
                                             if disp >= int(qtd_troca) and inv.get("id") is not None:
                                                 lote_id = inv["id"]
                                                 qtd_disp_lote = disp
@@ -775,8 +832,9 @@ def render_relatorio_colaborador() -> None:
                                         "quantidade": int(qtd_troca),
                                         "data_troca": str(data_troca),
                                         "data_entrega": str(data_troca),
-                                        "motivo": motivo_troca.strip(),
-                                        "observacoes": motivo_troca.strip(),
+                                        "data_vencimento": str(novo_venc_prev),
+                                        "motivo": motivo_troca.strip().upper(),
+                                        "observacoes": motivo_troca.strip().upper(),
                                     }
                                     _executar_insert_fallback(
                                         supabase,
@@ -796,15 +854,16 @@ def render_relatorio_colaborador() -> None:
                                     st.session_state[chave_acao_epi] = False
                                     st.session_state["msg_relatorio_colab"] = {
                                         "tipo": "success",
-                                        "texto": f"Troca de {nome_epi_str} ({int(qtd_troca)} un.) registrada para {nome_colab}!",
+                                        "texto": f"TROCA DE {nome_epi_str} ({int(qtd_troca)} UN.) REGISTRADA PARA {nome_colab}! VENC.: {novo_venc_prev.strftime('%d/%m/%Y')}",
                                     }
                                     _limpar_cache()
                                     st.rerun()
                                 except Exception as err:
                                     st.error(f"Erro ao registrar troca: {err}")
         else:
-            st.info("Nenhum EPI vinculado à função deste colaborador.")
+            st.info("NENHUM EPI VINCULADO À FUNÇÃO DESTE COLABORADOR.")
 
+        # ---------------- EXAMES ----------------
         st.subheader("📋 Exames")
         exames_req = _resolver_itens_catalogo(
             refs_exame,
@@ -833,13 +892,13 @@ def render_relatorio_colaborador() -> None:
                 copia = dict(tx)
                 copia["Exame"] = nome_tx
                 if not copia.get("status"):
-                    copia["status"] = "Pendente / Requisito da Função"
+                    copia["status"] = "PENDENTE / REQUISITO DA FUNÇÃO"
                 linhas_exames_exibir.append(copia)
 
         if linhas_exames_exibir:
             for idx, ex_item in enumerate(linhas_exames_exibir):
                 ex_id = str(ex_item.get("tipo_exame_id") or ex_item.get("id") or idx).strip()
-                nome_ex = str(ex_item.get("Exame") or _nome_exame(ex_item))
+                nome_ex = str(ex_item.get("Exame") or _nome_exame(ex_item)).upper()
                 per_val = (
                     ex_item.get("periodicidade_meses")
                     or ex_item.get("validade_meses")
@@ -852,7 +911,7 @@ def render_relatorio_colaborador() -> None:
                 venc_raw = ex_item.get("data_vencimento") or ex_item.get("proximo_vencimento") or ex_item.get("validade")
                 dt_venc_str = _formatar_data_br(venc_raw)
                 bol_ex, rot_ex = _indicador_vencimento(venc_raw)
-                status_ex = str(ex_item.get("status") or ex_item.get("resultado") or rot_ex)
+                status_ex = str(ex_item.get("status") or ex_item.get("resultado") or rot_ex).upper()
 
                 with st.container(border=True):
                     cols = st.columns([2.2, 1.0, 1.2, 1.9, 1.7, 1.3])
@@ -902,7 +961,7 @@ def render_relatorio_colaborador() -> None:
                                             "data_realizacao": str(data_real_ex),
                                             "data_vencimento": str(novo_venc_ex),
                                             "validade": str(novo_venc_ex),
-                                            "status": "Em dia",
+                                            "status": "EM DIA",
                                         }
                                         _executar_insert_fallback(
                                             supabase,
@@ -913,57 +972,81 @@ def render_relatorio_colaborador() -> None:
                                         st.session_state[chave_ren_ex] = False
                                         st.session_state["msg_relatorio_colab"] = {
                                             "tipo": "success",
-                                            "texto": f"Exame '{nome_ex}' renovado até {novo_venc_ex.strftime('%d/%m/%Y')}!",
+                                            "texto": f"EXAME '{nome_ex}' RENOVADO ATÉ {novo_venc_ex.strftime('%d/%m/%Y')}!",
                                         }
                                         _limpar_cache()
                                         st.rerun()
                                     except Exception as err:
                                         st.error(f"Erro ao renovar exame: {err}")
         else:
-            st.info("Nenhum exame vinculado à função deste colaborador.")
+            st.info("NENHUM EXAME VINCULADO À FUNÇÃO DESTE COLABORADOR.")
 
+        # ---------------- TREINAMENTOS ----------------
         st.subheader("🎓 Treinamentos")
+
+        # Coleta treinamentos vinculados ao colaborador, à função/cargo ou do catálogo se referenciados
+        trein_vinculados_colab = [
+            tr for tr in treinamentos
+            if str(tr.get("colaborador_id") or "").strip() == colab_sel_id
+        ]
+        trein_vinculados_funcao = []
+        for tr in treinamentos:
+            if str(tr.get("colaborador_id") or "").strip():
+                continue
+            tr_fid = str(tr.get("funcao_id") or tr.get("cargo_id") or "").strip()
+            tr_fnome = _normalizar(tr.get("funcao") or tr.get("cargo") or tr.get("nome_funcao") or tr.get("nome_cargo"))
+            if (funcao_id and tr_fid and tr_fid == funcao_id) or (
+                nome_funcao and nome_funcao != "—" and tr_fnome and tr_fnome == _normalizar(nome_funcao)
+            ):
+                trein_vinculados_funcao.append(tr)
+
         trein_req = _resolver_itens_catalogo(
             refs_trein,
             treinamentos,
-            ("nome", "nome_treinamento", "titulo", "curso", "descricao"),
+            ("nome_treinamento", "nome", "titulo", "curso", "tipo_treinamento", "descricao"),
             manter_nao_encontrados=True,
         )
 
-        linhas_trein_exibir: list[dict] = []
-        for tr in trein_do_colab:
-            copia = dict(tr)
-            copia["Treinamento"] = _nome_treinamento(copia)
-            linhas_trein_exibir.append(copia)
+        # Se não houver requisito explícito em funcao_requisitos para esta função, exibe treinamentos gerais/da função cadastrados
+        trein_base_lista = list(trein_vinculados_colab) + list(trein_vinculados_funcao) + list(trein_req)
+        if not trein_base_lista and treinamentos:
+            trein_base_lista = [
+                tr for tr in treinamentos if not str(tr.get("colaborador_id") or "").strip()
+            ]
 
-        for tr in trein_req:
+        linhas_trein_exibir: list[dict] = []
+        vistos_trein: set[str] = set()
+        for tr in trein_base_lista:
             nome_tr = _nome_treinamento(tr)
-            ja_existe = any(
-                _normalizar(l.get("Treinamento")) == _normalizar(nome_tr) and nome_tr != "—"
-                for l in linhas_trein_exibir
-            )
-            if not ja_existe:
-                copia = dict(tr)
-                copia["Treinamento"] = nome_tr
-                if not copia.get("status"):
-                    copia["status"] = "Pendente / Requisito da Função"
-                linhas_trein_exibir.append(copia)
+            chave_tr = _normalizar(nome_tr) if nome_tr != "—" else str(tr.get("id") or id(tr))
+            if chave_tr in vistos_trein:
+                continue
+            vistos_trein.add(chave_tr)
+            copia = dict(tr)
+            copia["Treinamento"] = nome_tr
+            linhas_trein_exibir.append(copia)
 
         if linhas_trein_exibir:
             for idx, tr_item in enumerate(linhas_trein_exibir):
                 tr_id = str(tr_item.get("id") or idx).strip()
-                nome_tr = str(tr_item.get("Treinamento") or _nome_treinamento(tr_item))
-                nr_tr = str(tr_item.get("nr") or tr_item.get("codigo_nr") or tr_item.get("carga_horaria") or "—")
+                nome_tr = str(tr_item.get("Treinamento") or _nome_treinamento(tr_item)).upper()
+                nr_tr = str(
+                    tr_item.get("tipo_treinamento")
+                    or tr_item.get("nr")
+                    or tr_item.get("codigo_nr")
+                    or tr_item.get("carga_horaria")
+                    or "—"
+                ).strip().upper()
                 real_tr_str = _formatar_data_br(tr_item.get("data_realizacao") or tr_item.get("data_conclusao"))
                 venc_raw_tr = tr_item.get("data_vencimento") or tr_item.get("validade")
                 venc_tr_str = _formatar_data_br(venc_raw_tr)
                 bol_tr, rot_tr = _indicador_vencimento(venc_raw_tr)
-                status_tr = str(tr_item.get("status") or rot_tr)
+                status_tr = str(tr_item.get("status") or rot_tr).upper()
 
                 with st.container(border=True):
-                    cols = st.columns([2.2, 1.0, 1.2, 1.9, 1.7, 1.3])
+                    cols = st.columns([2.2, 1.1, 1.2, 1.9, 1.6, 1.3])
                     cols[0].markdown(f"**Treinamento:**  \n{nome_tr}")
-                    cols[1].markdown(f"**NR/Carga:**  \n{nr_tr}")
+                    cols[1].markdown(f"**Tipo / NR:**  \n{nr_tr}")
                     cols[2].markdown(f"**Realização:**  \n{real_tr_str}")
                     cols[3].markdown(f"**Vencimento:**  \n{bol_tr} {venc_tr_str}")
                     cols[4].markdown(f"**Status:**  \n{bol_tr} {status_tr}")
@@ -973,44 +1056,53 @@ def render_relatorio_colaborador() -> None:
                         st.session_state[chave_ren_tr] = not st.session_state.get(chave_ren_tr, False)
 
                     if st.session_state.get(chave_ren_tr, False):
+                        per_trein_padrao = 12
+                        try:
+                            if tr_item.get("validade_meses"):
+                                per_trein_padrao = max(1, int(tr_item.get("validade_meses")))
+                        except Exception:
+                            per_trein_padrao = 12
+
                         with st.container(border=True):
                             with st.form(f"form_{chave_ren_tr}"):
                                 t1, t2 = st.columns(2)
                                 with t1:
                                     data_real_tr = st.date_input("Data de Conclusão", value=date.today(), format="DD/MM/YYYY")
                                 with t2:
-                                    meses_tr = st.number_input("Validade (meses)", min_value=1, value=12, step=1)
+                                    meses_tr = st.number_input("Validade (meses)", min_value=1, value=per_trein_padrao, step=1)
                                 novo_venc_tr = _somar_meses(data_real_tr, int(meses_tr))
                                 st.caption(f"Novo vencimento: **{novo_venc_tr.strftime('%d/%m/%Y')}**")
                                 if st.form_submit_button("✅ Confirmar Renovação"):
                                     try:
                                         payload_tr = {
                                             "colaborador_id": colab_sel_id,
+                                            "nome_treinamento": nome_tr,
+                                            "tipo_treinamento": str(tr_item.get("tipo_treinamento") or nome_tr).upper(),
                                             "nome": nome_tr,
                                             "titulo": nome_tr,
                                             "data_realizacao": str(data_real_tr),
                                             "data_conclusao": str(data_real_tr),
                                             "data_vencimento": str(novo_venc_tr),
                                             "validade": str(novo_venc_tr),
-                                            "status": "Em dia",
+                                            "status": "EM DIA",
                                         }
                                         _executar_insert_fallback(
                                             supabase,
                                             "treinamentos",
                                             payload_tr,
-                                            obrigatorias={"colaborador_id"},
+                                            obrigatorias={"tipo_treinamento", "data_vencimento"},
                                         )
                                         st.session_state[chave_ren_tr] = False
                                         st.session_state["msg_relatorio_colab"] = {
                                             "tipo": "success",
-                                            "texto": f"Treinamento '{nome_tr}' renovado até {novo_venc_tr.strftime('%d/%m/%Y')}!",
+                                            "texto": f"TREINAMENTO '{nome_tr}' RENOVADO ATÉ {novo_venc_tr.strftime('%d/%m/%Y')}!",
                                         }
                                         _limpar_cache()
                                         st.rerun()
                                     except Exception as err:
                                         st.error(f"Erro ao renovar treinamento: {err}")
         else:
-            st.info("Nenhum treinamento vinculado à função deste colaborador.")
+            st.info("NENHUM TREINAMENTO CADASTRADO OU VINCULADO.")
 
     with tab2:
         st.subheader("🕒 Histórico do Colaborador")
@@ -1038,7 +1130,7 @@ def render_relatorio_colaborador() -> None:
                 key="btn_baixar_pdf_colab",
             )
         else:
-            st.info("Nenhum histórico de troca de EPI, exame ou treinamento registrado para este colaborador.")
+            st.info("NENHUM HISTÓRICO DE TROCA DE EPI, EXAME OU TREINAMENTO REGISTRADO PARA ESTE COLABORADOR.")
 
     with tab3:
         st.subheader("📊 Relatório por Período")
@@ -1057,7 +1149,7 @@ def render_relatorio_colaborador() -> None:
         if filtrados_periodo:
             st.dataframe(pd.DataFrame(filtrados_periodo), use_container_width=True, hide_index=True)
         else:
-            st.info("Nenhum registro encontrado no período selecionado.")
+            st.info("NENHUM REGISTRO ENCONTRADO NO PERÍODO SELECIONADO.")
 
 
 render_relatorios = render_relatorio_colaborador
