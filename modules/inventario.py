@@ -206,17 +206,6 @@ def render_inventario() -> None:
                     try:
                         epi_escolhido = mapa_epis.get(epi_sel_id, {})
                         ca_escolhido = _obter_ca({}, epi_escolhido)
-                        val_escolhida = (
-                            str(data_validade_lote)
-                            if informar_val_lote
-                            else str(
-                                _parse_data(
-                                    epi_escolhido.get("data_validade_ca")
-                                    or epi_escolhido.get("validade_ca")
-                                )
-                                or data_validade_lote
-                            )
-                        )
 
                         obs_texto = observacoes.strip()
                         if informar_val_lote:
@@ -230,7 +219,6 @@ def render_inventario() -> None:
                         novo_lote = {
                             "epi_id": epi_sel_id,
                             "codigo_lote": codigo_lote.strip(),
-                            "quantidade_inicial": int(quantidade),
                             "quantidade_disponivel": int(quantidade),
                             "data_entrada": str(data_entrada),
                             "observacoes": obs_texto,
