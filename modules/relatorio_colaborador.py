@@ -294,8 +294,10 @@ def render_relatorio_colaborador() -> None:
                         st.caption("⏹️ Desligado")
                     else:
                         lotes_epi = [
-                            item for item in inventario
-                            if str(item.get("epi_id") or "").strip() == eid and int(item.get("quantidade_disponivel") or 0) > 0
+                            item
+                            for item in inventario
+                            if str(item.get("epi_id") or "").strip() == eid
+                            and int(item.get("quantidade_disponivel") or 0) > 0
                         ]
                         with st.popover("🔄", help=f"Trocar {nome_epi}"):
                             if not lotes_epi:
@@ -308,7 +310,8 @@ def render_relatorio_colaborador() -> None:
                                         f"Saldo: {l.get('quantidade_disponivel')} | "
                                         f"Entrada: {_formatar_data_br(l.get('data_entrada'))}"
                                     )
-                                    for l in lotes_epi if l.get("id")
+                                    for l in lotes_epi
+                                    if l.get("id")
                                 }
                                 lote_sel_id = st.selectbox(
                                     "Item do Inventário",
@@ -343,7 +346,10 @@ def render_relatorio_colaborador() -> None:
                                 novo_venc_epi = (
                                     data_troca + timedelta(days=dur_dias)
                                     if dur_dias > 0
-                                    else (_parse_data(epi.get("data_validade_ca") or epi.get("validade_ca")) or (data_troca + timedelta(days=365)))
+                                    else (
+                                        _parse_data(epi.get("data_validade_ca") or epi.get("validade_ca"))
+                                        or (data_troca + timedelta(days=365))
+                                    )
                                 )
                                 st.caption(f"Novo vencimento: **{novo_venc_epi.strftime('%d/%m/%Y')}**")
 
@@ -417,7 +423,10 @@ def render_relatorio_colaborador() -> None:
                                 key=f"dt_real_ex_{colab_id}_{ex_id}",
                             )
                             novo_venc_ex = _somar_meses(dt_real_ex, validade_meses)
-                            st.caption(f"Próximo vencimento ({validade_meses}m): **{novo_venc_ex.strftime('%d/%m/%Y')}**")
+                            st.caption(
+                                f"Próximo vencimento ({validade_meses}m): "
+                                f"**{novo_venc_ex.strftime('%d/%m/%Y')}**"
+                            )
                             obs_ex = st.text_input("Observação", key=f"obs_ex_{colab_id}_{ex_id}")
 
                             if st.button("Salvar Realização", key=f"btn_ren_ex_{colab_id}_{ex_id}"):
@@ -479,7 +488,10 @@ def render_relatorio_colaborador() -> None:
                             )
                             meses_tr = int(tr_base.get("validade_meses") or 12)
                             novo_venc_tr = _somar_meses(dt_real_tr, meses_tr)
-                            st.caption(f"Próximo vencimento ({meses_tr}m): **{novo_venc_tr.strftime('%d/%m/%Y')}**")
+                            st.caption(
+                                f"Próximo vencimento ({meses_tr}m): "
+                                f"**{novo_venc_tr.strftime('%d/%m/%Y')}**"
+                            )
 
                             if st.button("Salvar Realização", key=f"btn_ren_tr_{colab_id}_{tid}"):
                                 try:
@@ -513,7 +525,10 @@ def render_relatorio_colaborador() -> None:
         with p2:
             dt_fim = st.date_input("Data Final", value=date.today(), format="DD/MM/YYYY")
         with p3:
-            tipo_filtro = st.selectbox("Categoria", ["TODOS", "Trocas de EPI", "Exames Realizados", "Treinamentos Realizados"])
+            tipo_filtro = st.selectbox(
+                "Categoria",
+                ["TODOS", "Trocas de EPI", "Exames Realizados", "Treinamentos Realizados"],
+            )
 
         registros_periodo = []
 
@@ -562,4 +577,23 @@ def render_relatorio_colaborador() -> None:
                     cid = str(tr.get("colaborador_id") or "")
                     col_info = mapa_colabs.get(cid, {})
                     registros_periodo.append({
-                        "Data":
+                        "Data": dt_evt.strftime("%d/%m/%Y"),
+                        "Categoria": "🎓 Realização de Treinamento",
+                        "Colaborador": col_info.get("nome_completo") or "—",
+                        "Matrícula": col_info.get("matricula") or "—",
+                        "Status Colab.": col_info.get("status") or "Ativo",
+                        "Item / Evento": tr.get("tipo_treinamento") or "Treinamento",
+                        "Detalhes / Qtd": f"{tr.get('tipo_capacitacao', '')} ({tr.get('carga_horaria', '')}h)",
+                        "Novo Vencimento": _formatar_data_br(tr.get("data_vencimento")),
+                    })
+
+        if registros_periodo:
+            df_rep = pd.DataFrame(registros_periodo)
+            df_rep = df_rep.sort_values(by="Data", ascending=False)
+            st.markdown(
+                f"##### Total de eventos no período "
+                f"({dt_inicio.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}): **{len(df_rep)}**"
+            )
+            st.dataframe(df_rep, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhuma movimentação ou realização encontrada no período selecionado.")
