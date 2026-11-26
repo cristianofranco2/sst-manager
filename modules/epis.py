@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import re
 import pandas as pd
 import streamlit as st
 
@@ -65,24 +66,31 @@ def _extrair_id_inserido(res) -> str | None:
     return None
 
 
+def _extrair_coluna_pgrst204(msg: str) -> str | None:
+    match = re.search(r"Could not find the '([^']+)' column", msg)
+    if match:
+        return match.group(1).strip()
+    match_alt = re.search(r"column ['\"]([^'\"]+)['\"]", msg)
+    if match_alt:
+        return match_alt.group(1).strip()
+    return None
+
+
 def _inserir_epi_com_fallback(supabase, payload: dict):
     """
     Insere na tabela 'epis' garantindo que colunas obrigatórias (como numero_ca)
-    sejam preservadas e removendo apenas colunas opcionais inexistentes em caso de PGRST204.
+    sejam preservadas e removendo colunas inexistentes em caso de PGRST204.
     """
     dados = dict(payload)
-    for _ in range(12):
+    for _ in range(15):
         try:
             return supabase.table("epis").insert(dados).execute()
         except Exception as e:
             msg = str(e)
-            if "PGRST204" in msg and "column of 'epis'" in msg:
-                partes = msg.split("'")
-                if len(partes) >= 2:
-                    col_invalida = partes[1].strip()
-                    if col_invalida in dados and col_invalida not in COLUNAS_OBRIGATORIAS_EPI:
-                        dados.pop(col_invalida)
-                        continue
+            col_invalida = _extrair_coluna_pgrst204(msg)
+            if col_invalida and col_invalida in dados and col_invalida not in COLUNAS_OBRIGATORIAS_EPI:
+                dados.pop(col_invalida)
+                continue
             raise
     return supabase.table("epis").insert(dados).execute()
 
@@ -116,19 +124,16 @@ def _inserir_entrada_inicial_inventario(
     }
 
     dados = dict(payload)
-    for _ in range(12):
+    for _ in range(15):
         try:
             supabase.table("inventario_epi").insert(dados).execute()
             return True, None
         except Exception as e:
             msg = str(e)
-            if "PGRST204" in msg and "column of 'inventario_epi'" in msg:
-                partes = msg.split("'")
-                if len(partes) >= 2:
-                    col_invalida = partes[1].strip()
-                    if col_invalida in dados and col_invalida != "epi_id":
-                        dados.pop(col_invalida)
-                        continue
+            col_invalida = _extrair_coluna_pgrst204(msg)
+            if col_invalida and col_invalida in dados and col_invalida != "epi_id":
+                dados.pop(col_invalida)
+                continue
             return False, msg
     return False, "Não foi possível inserir a entrada inicial no inventário."
 
@@ -233,7 +238,6 @@ def render_epis() -> None:
                             "modelo": modelo.strip(),
                             "numero_ca": ca_limpo,
                             "data_validade_ca": str(validade_ca),
-                            "durabilidade_dias": int(durabilidade_dias),
                             "estoque_minimo": int(estoque_minimo),
                         }
                         res_epi = _inserir_epi_com_fallback(supabase, novo_epi)
