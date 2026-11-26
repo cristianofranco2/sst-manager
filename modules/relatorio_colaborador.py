@@ -572,4 +572,292 @@ def render_relatorio_colaborador() -> None:
                                         obrigatorias={"colaborador_id", "epi_id", "quantidade"},
                                     )
                                     if lote_id is not None:
-                                        novo_saldo = max(0, qtd_
+                                        novo_saldo = max(0, qtd_disp_lote - int(qtd_troca))
+                                        try:
+                                            supabase.table("inventario_epi").update(
+                                                {"quantidade_disponivel": novo_saldo}
+                                            ).eq("id", lote_id).execute()
+                                        except Exception:
+                                            pass
+
+                                    st.session_state[chave_acao_epi] = False
+                                    st.session_state["msg_relatorio_colab"] = {
+                                        "tipo": "success",
+                                        "texto": f"Troca de {nome_epi_str} ({int(qtd_troca)} un.) registrada para {nome_colab}!",
+                                    }
+                                    _limpar_cache()
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"Erro ao registrar troca: {err}")
+        else:
+            st.info("Nenhum EPI vinculado à função deste colaborador.")
+
+        # ---------------- EXAMES ----------------
+        st.subheader("📋 Exames")
+        exames_req = _resolver_itens_catalogo(
+            refs_exame,
+            tipos_exames,
+            ("nome", "nome_exame", "tipo_exame", "descricao"),
+            manter_nao_encontrados=True,
+        )
+
+        linhas_exames_exibir: list[dict] = []
+        for ex in exames_do_colab:
+            tx_id = str(ex.get("tipo_exame_id") or ex.get("exame_id") or "").strip()
+            tx_info = mapa_tipos_ex.get(tx_id, {})
+            combinado = {**tx_info, **ex}
+            combinado["Exame"] = _nome_exame(combinado)
+            linhas_exames_exibir.append(combinado)
+
+        for tx in exames_req:
+            tx_id = str(tx.get("id") or "").strip()
+            nome_tx = _nome_exame(tx)
+            ja_existe = any(
+                (tx_id and str(l.get("tipo_exame_id") or l.get("exame_id") or l.get("id") or "").strip() == tx_id)
+                or (_normalizar(l.get("Exame")) == _normalizar(nome_tx) and nome_tx != "—")
+                for l in linhas_exames_exibir
+            )
+            if not ja_existe:
+                copia = dict(tx)
+                copia["Exame"] = nome_tx
+                if not copia.get("status"):
+                    copia["status"] = "Pendente / Requisito da Função"
+                linhas_exames_exibir.append(copia)
+
+        if linhas_exames_exibir:
+            for idx, ex_item in enumerate(linhas_exames_exibir):
+                ex_id = str(ex_item.get("tipo_exame_id") or ex_item.get("id") or idx).strip()
+                nome_ex = str(ex_item.get("Exame") or _nome_exame(ex_item))
+                per_val = (
+                    ex_item.get("periodicidade_meses")
+                    or ex_item.get("validade_meses")
+                    or ex_item.get("periodicidade")
+                    or "—"
+                )
+                dt_real_str = _formatar_data_br(
+                    ex_item.get("data_realizacao") or ex_item.get("data_exame") or ex_item.get("data_aso")
+                )
+                venc_raw = ex_item.get("data_vencimento") or ex_item.get("proximo_vencimento") or ex_item.get("validade")
+                dt_venc_str = _formatar_data_br(venc_raw)
+                bol_ex, rot_ex = _indicador_vencimento(venc_raw)
+                status_ex = str(ex_item.get("status") or ex_item.get("resultado") or rot_ex)
+
+                with st.container(border=True):
+                    cols = st.columns([2.2, 1.0, 1.2, 1.9, 1.7, 1.3])
+                    cols[0].markdown(f"**Exame:**  \n{nome_ex}")
+                    cols[1].markdown(f"**Period.:**  \n{per_val}")
+                    cols[2].markdown(f"**Realização:**  \n{dt_real_str}")
+                    cols[3].markdown(f"**Vencimento:**  \n{bol_ex} {dt_venc_str}")
+                    cols[4].markdown(f"**Status:**  \n{bol_ex} {status_ex}")
+
+                    chave_ren_ex = f"abrir_ren_exame_{colab_sel_id}_{ex_id}_{idx}"
+                    if cols[5].button("🔁 Renovar", key=f"btn_{chave_ren_ex}", use_container_width=True):
+                        st.session_state[chave_ren_ex] = not st.session_state.get(chave_ren_ex, False)
+
+                    if st.session_state.get(chave_ren_ex, False):
+                        try:
+                            per_padrao = max(
+                                1, int(ex_item.get("periodicidade_meses") or ex_item.get("validade_meses") or 12)
+                            )
+                        except Exception:
+                            per_padrao = 12
+
+                        with st.form(f"form_{chave_ren_ex}"):
+                            r1, r2 = st.columns(2)
+                            with r1:
+                                data_real_ex = st.date_input("Data de Realização", value=date.today(), format="DD/MM/YYYY")
+                            with r2:
+                                meses_ex = st.number_input(
+                                    "Validade / Periodicidade (meses)", min_value=1, value=per_padrao, step=1
+                                )
+                            novo_venc_ex = _somar_meses(data_real_ex, int(meses_ex))
+                            st.caption(f"Novo vencimento: **{novo_venc_ex.strftime('%d/%m/%Y')}**")
+                            if st.form_submit_button("✅ Confirmar Renovação"):
+                                try:
+                                    tx_id_alvo = (
+                                        ex_item.get("tipo_exame_id")
+                                        or (
+                                            ex_item.get("id")
+                                            if str(ex_item.get("id") or "").strip() in mapa_tipos_ex
+                                            else None
+                                        )
+                                    )
+                                    payload_ex = {
+                                        "colaborador_id": colab_sel_id,
+                                        "tipo_exame_id": tx_id_alvo,
+                                        "nome": nome_ex,
+                                        "data_realizacao": str(data_real_ex),
+                                        "data_vencimento": str(novo_venc_ex),
+                                        "validade": str(novo_venc_ex),
+                                        "status": "Em dia",
+                                    }
+                                    _executar_insert_fallback(
+                                        supabase,
+                                        "exames_colaborador",
+                                        payload_ex,
+                                        obrigatorias={"colaborador_id"},
+                                    )
+                                    st.session_state[chave_ren_ex] = False
+                                    st.session_state["msg_relatorio_colab"] = {
+                                        "tipo": "success",
+                                        "texto": f"Exame '{nome_ex}' renovado até {novo_venc_ex.strftime('%d/%m/%Y')}!",
+                                    }
+                                    _limpar_cache()
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"Erro ao renovar exame: {err}")
+        else:
+            st.info("Nenhum exame vinculado à função deste colaborador.")
+
+        # ---------------- TREINAMENTOS ----------------
+        st.subheader("🎓 Treinamentos")
+        trein_req = _resolver_itens_catalogo(
+            refs_trein,
+            treinamentos,
+            ("nome", "nome_treinamento", "titulo", "curso", "descricao"),
+            manter_nao_encontrados=True,
+        )
+
+        linhas_trein_exibir: list[dict] = []
+        for tr in trein_do_colab:
+            copia = dict(tr)
+            copia["Treinamento"] = _nome_treinamento(copia)
+            linhas_trein_exibir.append(copia)
+
+        for tr in trein_req:
+            nome_tr = _nome_treinamento(tr)
+            ja_existe = any(
+                _normalizar(l.get("Treinamento")) == _normalizar(nome_tr) and nome_tr != "—"
+                for l in linhas_trein_exibir
+            )
+            if not ja_existe:
+                copia = dict(tr)
+                copia["Treinamento"] = nome_tr
+                if not copia.get("status"):
+                    copia["status"] = "Pendente / Requisito da Função"
+                linhas_trein_exibir.append(copia)
+
+        if linhas_trein_exibir:
+            for idx, tr_item in enumerate(linhas_trein_exibir):
+                tr_id = str(tr_item.get("id") or idx).strip()
+                nome_tr = str(tr_item.get("Treinamento") or _nome_treinamento(tr_item))
+                nr_tr = str(tr_item.get("nr") or tr_item.get("codigo_nr") or tr_item.get("carga_horaria") or "—")
+                real_tr_str = _formatar_data_br(tr_item.get("data_realizacao") or tr_item.get("data_conclusao"))
+                venc_raw_tr = tr_item.get("data_vencimento") or tr_item.get("validade")
+                venc_tr_str = _formatar_data_br(venc_raw_tr)
+                bol_tr, rot_tr = _indicador_vencimento(venc_raw_tr)
+                status_tr = str(tr_item.get("status") or rot_tr)
+
+                with st.container(border=True):
+                    cols = st.columns([2.2, 1.0, 1.2, 1.9, 1.7, 1.3])
+                    cols[0].markdown(f"**Treinamento:**  \n{nome_tr}")
+                    cols[1].markdown(f"**NR/Carga:**  \n{nr_tr}")
+                    cols[2].markdown(f"**Realização:**  \n{real_tr_str}")
+                    cols[3].markdown(f"**Vencimento:**  \n{bol_tr} {venc_tr_str}")
+                    cols[4].markdown(f"**Status:**  \n{bol_tr} {status_tr}")
+
+                    chave_ren_tr = f"abrir_ren_trein_{colab_sel_id}_{tr_id}_{idx}"
+                    if cols[5].button("🔁 Renovar", key=f"btn_{chave_ren_tr}", use_container_width=True):
+                        st.session_state[chave_ren_tr] = not st.session_state.get(chave_ren_tr, False)
+
+                    if st.session_state.get(chave_ren_tr, False):
+                        with st.form(f"form_{chave_ren_tr}"):
+                            t1, t2 = st.columns(2)
+                            with t1:
+                                data_real_tr = st.date_input("Data de Conclusão", value=date.today(), format="DD/MM/YYYY")
+                            with t2:
+                                meses_tr = st.number_input("Validade (meses)", min_value=1, value=12, step=1)
+                            novo_venc_tr = _somar_meses(data_real_tr, int(meses_tr))
+                            st.caption(f"Novo vencimento: **{novo_venc_tr.strftime('%d/%m/%Y')}**")
+                            if st.form_submit_button("✅ Confirmar Renovação"):
+                                try:
+                                    payload_tr = {
+                                        "colaborador_id": colab_sel_id,
+                                        "nome": nome_tr,
+                                        "titulo": nome_tr,
+                                        "data_realizacao": str(data_real_tr),
+                                        "data_conclusao": str(data_real_tr),
+                                        "data_vencimento": str(novo_venc_tr),
+                                        "validade": str(novo_venc_tr),
+                                        "status": "Em dia",
+                                    }
+                                    _executar_insert_fallback(
+                                        supabase,
+                                        "treinamentos",
+                                        payload_tr,
+                                        obrigatorias={"colaborador_id"},
+                                    )
+                                    st.session_state[chave_ren_tr] = False
+                                    st.session_state["msg_relatorio_colab"] = {
+                                        "tipo": "success",
+                                        "texto": f"Treinamento '{nome_tr}' renovado até {novo_venc_tr.strftime('%d/%m/%Y')}!",
+                                    }
+                                    _limpar_cache()
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"Erro ao renovar treinamento: {err}")
+        else:
+            st.info("Nenhum treinamento vinculado à função deste colaborador.")
+
+    with tab2:
+        st.subheader("🕒 Histórico do Colaborador")
+        if historico_itens:
+            st.dataframe(pd.DataFrame(historico_itens), use_container_width=True, hide_index=True)
+
+            pdf_bytes, texto_rel = _gerar_pdf_bytes(
+                titulo=f"Histórico SST - {nome_colab}",
+                resumo_colab={
+                    "colaborador": nome_colab,
+                    "matricula": matricula,
+                    "funcao": nome_funcao,
+                    "setor": setor,
+                    "status": status,
+                },
+                linhas_historico=historico_itens,
+            )
+
+            nome_arquivo_base = f"historico_sst_{_normalizar(nome_colab).replace(' ', '_') or 'colaborador'}"
+            if pdf_bytes:
+                st.download_button(
+                    label="📥 Baixar Relatório em PDF",
+                    data=pdf_bytes,
+                    file_name=f"{nome_arquivo_base}.pdf",
+                    mime="application/pdf",
+                    key="btn_baixar_pdf_colab",
+                )
+            else:
+                st.warning(
+                    "A biblioteca de geração de PDF (`fpdf2`) não está instalada no ambiente; "
+                    "disponibilizamos o relatório formatado para download em `.txt` ou adicione `fpdf2` ao `requirements.txt`."
+                )
+                st.download_button(
+                    label="📥 Baixar Histórico (.TXT)",
+                    data=texto_rel.encode("utf-8"),
+                    file_name=f"{nome_arquivo_base}.txt",
+                    mime="text/plain",
+                    key="btn_baixar_txt_colab",
+                )
+        else:
+            st.info("Nenhum histórico de troca de EPI, exame ou treinamento registrado para este colaborador.")
+
+    with tab3:
+        st.subheader("📊 Relatório por Período")
+        p1, p2 = st.columns(2)
+        with p1:
+            dt_ini = st.date_input("Data Inicial", value=date.today().replace(day=1), format="DD/MM/YYYY")
+        with p2:
+            dt_fim = st.date_input("Data Final", value=date.today(), format="DD/MM/YYYY")
+
+        filtrados_periodo = []
+        for h in historico_itens:
+            dt_ref = _parse_data(h.get("Vencimento")) or _parse_data(h.get("Data"))
+            if dt_ref and dt_ini <= dt_ref <= dt_fim:
+                filtrados_periodo.append(h)
+
+        if filtrados_periodo:
+            st.dataframe(pd.DataFrame(filtrados_periodo), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum registro encontrado no período selecionado.")
+
+
+render_relatorios = render_relatorio_colaborador
