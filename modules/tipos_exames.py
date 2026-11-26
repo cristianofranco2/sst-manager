@@ -38,30 +38,6 @@ def _executar_insert_maiusculo(supabase, tabela: str, payload: dict, obrigatoria
     return supabase.table(tabela).insert(dados).execute()
 
 
-def _converter_exames_existentes_maiusculo(supabase) -> tuple[int, int]:
-    atualizados = 0
-    erros = 0
-    res = supabase.table("tipos_exames").select("*").execute()
-    for row in res.data or []:
-        rid = row.get("id")
-        if rid is None:
-            continue
-        patch = {}
-        for campo in ("nome", "nome_exame", "tipo_exame", "codigo_tuss", "observacoes", "descricao"):
-            val = row.get(campo)
-            if isinstance(val, str) and val.strip():
-                up = " ".join(val.strip().upper().split())
-                if up != val:
-                    patch[campo] = up
-        if patch:
-            try:
-                supabase.table("tipos_exames").update(patch).eq("id", rid).execute()
-                atualizados += 1
-            except Exception:
-                erros += 1
-    return atualizados, erros
-
-
 def render_tipos_exames() -> None:
     render_cabecalho_modulo("📋 Cadastro de Exames")
     supabase = get_supabase()
@@ -72,14 +48,6 @@ def render_tipos_exames() -> None:
         c_top1, c_top2 = st.columns([4, 1.5])
         c_top1.subheader("Tipos de Exames Cadastrados")
         if c_top2.button("🔄 Atualizar lista", key="btn_att_exames", use_container_width=True):
-            st.rerun()
-
-        if st.button("🔠 Padronizar cadastrados em MAIÚSCULO", key="btn_up_exames_existentes"):
-            ok_q, err_q = _converter_exames_existentes_maiusculo(supabase)
-            st.success(
-                f"Exames atualizados para MAIÚSCULO: {ok_q}"
-                + (f" (erros: {err_q})" if err_q else "")
-            )
             st.rerun()
 
         res = supabase.table("tipos_exames").select("*").execute()
