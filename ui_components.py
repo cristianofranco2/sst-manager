@@ -1,10 +1,38 @@
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from PIL import Image as PILImage, ImageDraw, ImageFont
 import streamlit as st
 
 
-def localizar_logo() -> Path | None:
+def _gerar_logo_padrao_bytes() -> bytes:
+    """Gera um PNG limpo com a marca GLOBEX MULTIMODAL caso o arquivo externo não exista."""
+    img = PILImage.new("RGB", (640, 220), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    # Texto principal GLOBEX MULTIMODAL
+    fonte_grande = ImageFont.load_default(size=54)
+    fonte_sub = ImageFont.load_default(size=28)
+
+    draw.text((28, 48), "GLOBEX", fill=(11, 57, 84), font=fonte_grande)
+    draw.text((135, 118), "MULTIMODAL", fill=(24, 68, 94), font=fonte_sub)
+
+    # Ícone geométrico lateral (azul e vermelho)
+    azul = (0, 168, 224)
+    vermelho = (206, 24, 54)
+
+    pts_azul = [(475, 65), (525, 38), (575, 65), (575, 135), (525, 162), (475, 135)]
+    draw.polygon(pts_azul, outline=azul, width=9)
+
+    pts_vermelho = [(515, 32), (555, 12), (598, 36), (598, 122), (578, 132), (578, 48), (552, 33), (522, 49)]
+    draw.polygon(pts_vermelho, fill=vermelho)
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def obter_logo_bytes() -> bytes:
     candidatos = [
         Path("assets/logo.png"),
         Path("assets/Logo.png"),
@@ -14,16 +42,15 @@ def localizar_logo() -> Path | None:
     ]
     for caminho in candidatos:
         if caminho.exists() and caminho.is_file():
-            return caminho
-    return None
+            try:
+                return caminho.read_bytes()
+            except Exception:
+                pass
+    return _gerar_logo_padrao_bytes()
 
 
 def render_logo_sidebar() -> None:
-    logo_path = localizar_logo()
-    if logo_path:
-        st.sidebar.image(str(logo_path), use_container_width=True)
-    else:
-        st.sidebar.markdown("### GLOBEX MULTIMODAL")
+    st.sidebar.image(obter_logo_bytes(), use_container_width=True)
     st.sidebar.caption("Gestor SST • Indaiatuba - SP")
     st.sidebar.markdown("---")
 
@@ -35,11 +62,7 @@ def render_cabecalho_modulo(titulo: str, subtitulo: str = "") -> None:
         if subtitulo:
             st.caption(subtitulo)
     with col_dir:
-        logo_path = localizar_logo()
-        if logo_path:
-            st.image(str(logo_path), use_container_width=True)
-        else:
-            st.markdown("**GLOBEX MULTIMODAL**")
+        st.image(obter_logo_bytes(), use_container_width=True)
 
 
 def gerar_pdf_historico_colaborador(
@@ -49,16 +72,13 @@ def gerar_pdf_historico_colaborador(
     linhas_trein: list[dict],
     historico_eventos: list[dict],
 ) -> tuple[bytes | None, str | None]:
-    """
-    Gera um PDF em bytes usando reportlab, incluindo o logo da empresa e datas em dd/mm/aaaa.
-    Retorna (pdf_bytes, erro).
-    """
+    """Gera um PDF em bytes usando reportlab, incluindo o logo da empresa e datas em dd/mm/aaaa."""
     try:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import cm
-        from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.platypus import Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     except ImportError:
         return None, "Biblioteca 'reportlab' não instalada. Adicione 'reportlab' ao requirements.txt."
 
@@ -73,13 +93,6 @@ def gerar_pdf_historico_colaborador(
     )
 
     styles = getSampleStyleSheet()
-    estilo_titulo = ParagraphStyle(
-        "TituloRelatorio",
-        parent=styles["Heading1"],
-        fontSize=15,
-        textColor=colors.HexColor("#0B3954"),
-        spaceAfter=4,
-    )
     estilo_sub = ParagraphStyle(
         "SubRelatorio",
         parent=styles["Normal"],
@@ -98,32 +111,27 @@ def gerar_pdf_historico_colaborador(
 
     elementos = []
 
-    # Cabeçalho com Logo
-    logo_path = localizar_logo()
+    logo_bytes = obter_logo_bytes()
+    img_stream = BytesIO(logo_bytes)
+    img = RLImage(img_stream, width=4.5 * cm, height=1.8 * cm, kind="proportional")
+
     texto_cab = Paragraph(
         "<b>GLOBEX MULTIMODAL</b><br/>"
         "Relatório de Histórico e Vencimentos SST por Colaborador<br/>"
         f"<font size=8 color='#555555'>Emitido em: {date.today().strftime('%d/%m/%Y')} às {datetime.now().strftime('%H:%M')}</font>",
         estilo_sub,
     )
-    if logo_path:
-        img = Image(str(logo_path), width=4.2 * cm, height=1.8 * cm, kind="proportional")
-        tabela_topo = Table([[img, texto_cab]], colWidths=[4.8 * cm, 13.2 * cm])
-        tabela_topo.setStyle(
-            TableStyle([
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LINEBELOW", (0, 0), (-1, -1), 1, colors.HexColor("#0099CC")),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-            ])
-        )
-        elementos.append(tabela_topo)
-    else:
-        elementos.append(Paragraph("GLOBEX MULTIMODAL — Relatório SST", estilo_titulo))
-        elementos.append(texto_cab)
-
+    tabela_topo = Table([[img, texto_cab]], colWidths=[5.0 * cm, 13.0 * cm])
+    tabela_topo.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LINEBELOW", (0, 0), (-1, -1), 1, colors.HexColor("#0099CC")),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ])
+    )
+    elementos.append(tabela_topo)
     elementos.append(Spacer(1, 0.3 * cm))
 
-    # Dados do Colaborador
     elementos.append(Paragraph("Dados do Colaborador", estilo_secao))
     dados_colab = [
         ["Nome Completo", str(colab.get("nome_completo") or "—"), "Matrícula", str(colab.get("matricula") or "—")],
@@ -142,7 +150,12 @@ def gerar_pdf_historico_colaborador(
     )
     elementos.append(t_colab)
 
-    def _adicionar_tabela(titulo_sec: str, cabecalhos: list[str], linhas: list[list[str]], col_widths: list[float]) -> None:
+    def _adicionar_tabela(
+        titulo_sec: str,
+        cabecalhos: list[str],
+        linhas: list[list[str]],
+        col_widths: list[float],
+    ) -> None:
         elementos.append(Paragraph(titulo_sec, estilo_secao))
         if not linhas:
             elementos.append(Paragraph("Nenhum registro encontrado.", estilo_sub))
