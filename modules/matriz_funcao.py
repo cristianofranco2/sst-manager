@@ -349,4 +349,33 @@ def render_matriz_funcao() -> None:
         resumo_linhas = []
         for eid in requisitos_salvos.get("epi_ids") or []:
             eid_str = str(eid)
-            qtd_item = qtds_salvas.get(eid
+            qtd_item = qtds_salvas.get(eid_str, 1)
+            resumo_linhas.append(
+                {
+                    "Categoria": "EPI",
+                    "Item": mapa_epis.get(eid_str, eid_str),
+                    "Quantidade": qtd_item,
+                }
+            )
+        for tid in requisitos_salvos.get("treinamento_ids") or []:
+            tid_str = str(tid)
+            resumo_linhas.append(
+                {
+                    "Categoria": "Treinamento",
+                    "Item": mapa_trein.get(tid_str, tid_str),
+                    "Quantidade": "-",
+                }
+            )
+        for xid in requisitos_salvos.get("exame_ids") or []:
+            xid_str = str(xid)
+            resumo_linhas.append(
+                {
+                    "Categoria": "Exame",
+                    "Item": mapa_exames.get(xid_str, xid_str),
+                    "Quantidade": "-",
+                }
+            )
+
+        if resumo_linhas:
+            st.markdown("##### Itens Atualmente Vinculados a Este Cargo no Banco")
+            st.dataframe(pd.DataFrame(resumo_linhas), use_container_width=True, hide_index=True)
