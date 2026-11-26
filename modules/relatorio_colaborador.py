@@ -159,43 +159,32 @@ def render_relatorio_colaborador() -> None:
         st.error(f"Erro ao conectar com o Supabase: {e}")
         return
 
-    tab1, tab2, tab3 = st.tabs([
-        "👤 Visão por Colaborador",
-        "🕒 Histórico do Colaborador (PDF)",
-        "📊 Relatório por Período",
-    ])
-
     colaboradores = _buscar_colaboradores()
-    mapa_colabs = {str(c["id"]): c for c in colaboradores if c.get("id")}
-    ids_colabs = list(mapa_colabs.keys())
-
-    funcoes = _buscar_funcoes()
-    requisitos_lista = _buscar_requisitos()
-    epis = _buscar_epis()
-    inventario = _buscar_inventario()
-    historico_trocas = _buscar_historico_trocas()
-    treinamentos = _buscar_treinamentos()
-    exames = _buscar_tipos_exames()
-    exames_colab = _buscar_exames_colaborador()
-
-    mapa_epis = {str(e["id"]).strip(): e for e in epis if e.get("id")}
-    mapa_trein = {str(t["id"]).strip(): t for t in treinamentos if t.get("id")}
-    mapa_exames = {str(x["id"]).strip(): x for x in exames if x.get("id")}
-
     if not colaboradores:
         st.info("Nenhum colaborador cadastrado.")
         return
 
-    colab_id = st.selectbox(
-        "Selecione o Colaborador",
-        options=ids_colabs,
-        format_func=lambda cid: (
-            f"{mapa_colabs[cid].get('nome_completo', 'Sem nome')} "
-            f"({mapa_colabs[cid].get('matricula', '')}) — {mapa_colabs[cid].get('cargo', '')} "
-            f"[{mapa_colabs[cid].get('status', 'Ativo')}]"
-        ),
-        key="select_colab_relatorio",
-    )
+    mapa_colabs = {str(c["id"]): c for c in colaboradores if c.get("id")}
+    ids_colabs = list(mapa_colabs.keys())
+
+    # Seletor principal de colaborador sempre visível no topo do módulo
+    c_sel, c_btn = st.columns([5, 1])
+    with c_sel:
+        colab_id = st.selectbox(
+            "Filtrar / Selecionar Colaborador",
+            options=ids_colabs,
+            format_func=lambda cid: (
+                f"{mapa_colabs[cid].get('nome_completo', 'Sem nome')} "
+                f"({mapa_colabs[cid].get('matricula', '')}) — {mapa_colabs[cid].get('cargo', '')} "
+                f"[{mapa_colabs[cid].get('status', 'Ativo')}]"
+            ),
+            key="select_colab_relatorio",
+        )
+    with c_btn:
+        st.markdown("<br/>", unsafe_allow_html=True)
+        if st.button("🔄 Atualizar", key="btn_atualizar_relatorio_topo", use_container_width=True):
+            _limpar_todo_cache_relatorio()
+            st.rerun()
 
     colab = mapa_colabs[colab_id]
     nome_colab = str(colab.get("nome_completo") or "—").strip()
@@ -220,6 +209,19 @@ def render_relatorio_colaborador() -> None:
             "para este colaborador. Os registros são mantidos exclusivamente para consulta histórica."
         )
 
+    funcoes = _buscar_funcoes()
+    requisitos_lista = _buscar_requisitos()
+    epis = _buscar_epis()
+    inventario = _buscar_inventario()
+    historico_trocas = _buscar_historico_trocas()
+    treinamentos = _buscar_treinamentos()
+    exames = _buscar_tipos_exames()
+    exames_colab = _buscar_exames_colaborador()
+
+    mapa_epis = {str(e["id"]).strip(): e for e in epis if e.get("id")}
+    mapa_trein = {str(t["id"]).strip(): t for t in treinamentos if t.get("id")}
+    mapa_exames = {str(x["id"]).strip(): x for x in exames if x.get("id")}
+
     funcao_id_encontrado = str(colab.get("funcao_id")).strip() if colab.get("funcao_id") else None
     if not funcao_id_encontrado:
         alvo = " ".join(funcao_colab.lower().split())
@@ -242,7 +244,6 @@ def render_relatorio_colaborador() -> None:
     trein_ids_req = _normalizar_lista_ids(req_funcao.get("treinamento_ids"))
     exame_ids_req = _normalizar_lista_ids(req_funcao.get("exame_ids"))
 
-    # Monta histórico consolidado do colaborador selecionado
     historico_colab_eventos: list[dict] = []
     for h in historico_trocas:
         if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
@@ -277,7 +278,6 @@ def render_relatorio_colaborador() -> None:
                 "Detalhes": f"{tr.get('tipo_capacitacao') or 'Capacitação'} ({tr.get('carga_horaria') or '—'}h)",
             })
 
-    # Prepara linhas de EPI, Exame e Treinamento
     ultima_troca_epi: dict[str, dict] = {}
     for h in historico_trocas:
         if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
@@ -355,14 +355,13 @@ def render_relatorio_colaborador() -> None:
         linhas_trein_exibicao.append((tid, tr_base, nome_tr, venc_str, dias_str))
         linhas_trein_resumo.append({"Treinamento": nome_tr, "Vencimento": venc_str, "Dias Restantes": dias_str})
 
-    # ABA 1: VISÃO POR COLABORADOR
-    with tab1:
-        _, col_top2 = st.columns([5, 1])
-        with col_top2:
-            if st.button("🔄 Atualizar", key="btn_atualizar_relatorio_tab1", use_container_width=True):
-                _limpar_todo_cache_relatorio()
-                st.rerun()
+    tab1, tab2, tab3 = st.tabs([
+        "👤 Visão por Colaborador",
+        "🕒 Histórico do Colaborador (PDF)",
+        "📊 Relatório por Período",
+    ])
 
+    with tab1:
         st.markdown("### 🥽 EPIs")
         if linhas_epi_exibicao:
             for eid, epi, nome_epi, qtd, label_item, venc_str, dias_str in linhas_epi_exibicao:
@@ -542,7 +541,6 @@ def render_relatorio_colaborador() -> None:
         else:
             st.caption("Nenhum treinamento vinculado à função deste colaborador.")
 
-    # ABA 2: HISTÓRICO DO COLABORADOR + IMPRESSÃO EM PDF COM LOGO
     with tab2:
         st.subheader(f"🕒 Histórico Completo — {nome_colab}")
 
@@ -575,15 +573,21 @@ def render_relatorio_colaborador() -> None:
         else:
             st.info("Nenhuma troca ou realização registrada para este colaborador até o momento.")
 
-    # ABA 3: RELATÓRIO POR PERÍODO
     with tab3:
         st.subheader("🗓️ Consulta Geral de Movimentações por Período")
-        p1, p2, p3 = st.columns([2, 2, 2])
+        p1, p2, p3, p4 = st.columns([2, 2, 2, 2])
         with p1:
             dt_inicio = st.date_input("Data Inicial", value=date.today() - timedelta(days=30), format="DD/MM/YYYY")
         with p2:
             dt_fim = st.date_input("Data Final", value=date.today(), format="DD/MM/YYYY")
         with p3:
+            filtro_colab_periodo = st.selectbox(
+                "Colaborador",
+                options=["TODOS"] + ids_colabs,
+                format_func=lambda cid: "Todos os Colaboradores" if cid == "TODOS" else str(mapa_colabs[cid].get("nome_completo") or "—"),
+                key="filtro_colab_periodo",
+            )
+        with p4:
             tipo_filtro = st.selectbox(
                 "Categoria",
                 ["TODOS", "Trocas de EPI", "Exames Realizados", "Treinamentos Realizados"],
@@ -594,8 +598,10 @@ def render_relatorio_colaborador() -> None:
         if tipo_filtro in ["TODOS", "Trocas de EPI"]:
             for h in historico_trocas:
                 dt_evt = _parse_data(h.get("data_troca"))
+                cid = str(h.get("colaborador_id") or "")
                 if dt_evt and dt_inicio <= dt_evt <= dt_fim:
-                    cid = str(h.get("colaborador_id") or "")
+                    if filtro_colab_periodo != "TODOS" and cid != filtro_colab_periodo:
+                        continue
                     col_info = mapa_colabs.get(cid, {})
                     eid = str(h.get("epi_id") or "")
                     epi_info = mapa_epis.get(eid, {})
@@ -613,8 +619,10 @@ def render_relatorio_colaborador() -> None:
         if tipo_filtro in ["TODOS", "Exames Realizados"]:
             for ec in exames_colab:
                 dt_evt = _parse_data(ec.get("data_realizacao"))
+                cid = str(ec.get("colaborador_id") or "")
                 if dt_evt and dt_inicio <= dt_evt <= dt_fim:
-                    cid = str(ec.get("colaborador_id") or "")
+                    if filtro_colab_periodo != "TODOS" and cid != filtro_colab_periodo:
+                        continue
                     col_info = mapa_colabs.get(cid, {})
                     xid = str(ec.get("tipo_exame_id") or "")
                     ex_info = mapa_exames.get(xid, {})
@@ -632,8 +640,10 @@ def render_relatorio_colaborador() -> None:
         if tipo_filtro in ["TODOS", "Treinamentos Realizados"]:
             for tr in treinamentos:
                 dt_evt = _parse_data(tr.get("data_realizacao") or tr.get("data_emissao"))
+                cid = str(tr.get("colaborador_id") or "")
                 if dt_evt and dt_inicio <= dt_evt <= dt_fim:
-                    cid = str(tr.get("colaborador_id") or "")
+                    if filtro_colab_periodo != "TODOS" and cid != filtro_colab_periodo:
+                        continue
                     col_info = mapa_colabs.get(cid, {})
                     registros_periodo.append({
                         "Data": dt_evt.strftime("%d/%m/%Y"),
@@ -642,7 +652,7 @@ def render_relatorio_colaborador() -> None:
                         "Matrícula": col_info.get("matricula") or "—",
                         "Status Colab.": col_info.get("status") or "Ativo",
                         "Item / Evento": tr.get("tipo_treinamento") or "Treinamento",
-                        "Detalhes / Qtd": f"{tr.get('tipo_capacitacao', '')} ({tr.get('carga_horaria', '')}h)",
+                        "Detalhes / Qtd": f"{tr.get('tipo_capacitacao') or ''} ({tr.get('carga_horaria') or ''}h)",
                         "Novo Vencimento": _formatar_data_br(tr.get("data_vencimento")),
                     })
 
