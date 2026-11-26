@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -82,7 +83,7 @@ def _label_epi_detalhado(epi: dict) -> str:
 
 
 def render_inventario() -> None:
-    st.title("📦 Cadastro de Inventário e Histórico de Trocas")
+    render_cabecalho_modulo("📦 Cadastro de Inventário e Histórico de Trocas")
 
     try:
         supabase = get_supabase()
