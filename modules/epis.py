@@ -270,8 +270,6 @@ def render_epis() -> None:
                     modelo = str(e.get("modelo") or "—").strip()
                     ca = str(e.get("numero_ca") or e.get("ca") or e.get("codigo_ca") or "—").strip()
                     val_ca = _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca"))
-                    durabilidade = e.get("durabilidade_dias")
-                    durab_str = "—" if durabilidade in (None, "") else int(durabilidade)
                     estoque_real = saldos_inv.get(eid, 0)
                     estoque_min = e.get("estoque_minimo")
                     est_min_str = "—" if estoque_min in (None, "") else int(estoque_min)
@@ -283,7 +281,6 @@ def render_epis() -> None:
                         "Modelo": modelo,
                         "Nº CA": ca,
                         "Validade CA": val_ca,
-                        "Durabilidade (dias)": durab_str,
                         "Estoque": estoque_real,
                         "Estoque Mín.": est_min_str,
                     })
@@ -404,5 +401,4 @@ def render_epis() -> None:
                                     f"(ou restrição única no banco). Se o erro citar 'epis_codigo_sku_key', "
                                     f"rode o SQL para trocar a unicidade para (codigo_sku, numero_ca, data_validade_ca)."
                                 )
-                            else:
-                                st.error(f"Erro ao salvar EPI no Supabase: {e}")
+                            else
