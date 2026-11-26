@@ -124,7 +124,11 @@ def _somar_meses(data_base: date, meses: int) -> date:
     return date(ano_total, mes_novo, dia_novo)
 
 
-def _formatar_vencimento_e_dias(data_venc: date | None, hoje: date, is_desligado: bool = False) -> tuple[str, str]:
+def _formatar_vencimento_e_dias(
+    data_venc: date | None,
+    hoje: date,
+    is_desligado: bool = False,
+) -> tuple[str, str]:
     if not data_venc:
         return "—", "Sem data"
 
@@ -167,7 +171,6 @@ def render_relatorio_colaborador() -> None:
     mapa_colabs = {str(c["id"]): c for c in colaboradores if c.get("id")}
     ids_colabs = list(mapa_colabs.keys())
 
-    # Seletor principal de colaborador sempre visível no topo do módulo
     c_sel, c_btn = st.columns([5, 1])
     with c_sel:
         colab_id = st.selectbox(
@@ -244,40 +247,6 @@ def render_relatorio_colaborador() -> None:
     trein_ids_req = _normalizar_lista_ids(req_funcao.get("treinamento_ids"))
     exame_ids_req = _normalizar_lista_ids(req_funcao.get("exame_ids"))
 
-    historico_colab_eventos: list[dict] = []
-    for h in historico_trocas:
-        if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
-            eid_h = str(h.get("epi_id") or "").strip()
-            epi_h = mapa_epis.get(eid_h, {})
-            historico_colab_eventos.append({
-                "Data": _formatar_data_br(h.get("data_troca")),
-                "Tipo": "🥽 Troca de EPI",
-                "Item": str(epi_h.get("descricao") or epi_h.get("nome_epi") or "EPI"),
-                "Vencimento": _formatar_data_br(h.get("data_vencimento_novo")),
-                "Detalhes": f"Qtd: {h.get('quantidade', 1)} | {h.get('motivo') or 'Troca'}",
-            })
-
-    for ec in exames_colab:
-        if str(ec.get("colaborador_id") or "").strip() == str(colab_id).strip():
-            ex_c = mapa_exames.get(str(ec.get("tipo_exame_id") or "").strip(), {})
-            historico_colab_eventos.append({
-                "Data": _formatar_data_br(ec.get("data_realizacao")),
-                "Tipo": "📋 Exame Realizado",
-                "Item": str(ex_c.get("nome_exame") or "Exame"),
-                "Vencimento": _formatar_data_br(ec.get("data_vencimento")),
-                "Detalhes": str(ec.get("observacoes") or "Realização registrada"),
-            })
-
-    for tr in treinamentos:
-        if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
-            historico_colab_eventos.append({
-                "Data": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_emissao")),
-                "Tipo": "🎓 Treinamento Realizado",
-                "Item": str(tr.get("tipo_treinamento") or "Treinamento"),
-                "Vencimento": _formatar_data_br(tr.get("data_vencimento")),
-                "Detalhes": f"{tr.get('tipo_capacitacao') or 'Capacitação'} ({tr.get('carga_horaria') or '—'}h)",
-            })
-
     ultima_troca_epi: dict[str, dict] = {}
     for h in historico_trocas:
         if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
@@ -286,7 +255,6 @@ def render_relatorio_colaborador() -> None:
                 ultima_troca_epi[eid_h] = h
 
     linhas_epi_exibicao = []
-    linhas_epi_resumo = []
     for eid in epi_ids_req:
         epi = mapa_epis.get(eid)
         if not epi:
@@ -307,7 +275,6 @@ def render_relatorio_colaborador() -> None:
 
         venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_epi, hoje, is_desligado=is_desligado)
         linhas_epi_exibicao.append((eid, epi, nome_epi, qtd, label_item, venc_str, dias_str))
-        linhas_epi_resumo.append({"EPI": label_item, "Vencimento": venc_str, "Dias Restantes": dias_str})
 
     ultimos_exames_colab: dict[str, date] = {}
     for ec in exames_colab:
@@ -319,7 +286,6 @@ def render_relatorio_colaborador() -> None:
                     ultimos_exames_colab[ex_id_c] = dt_v
 
     linhas_exame_exibicao = []
-    linhas_exame_resumo = []
     for ex_id in exame_ids_req:
         ex = mapa_exames.get(ex_id)
         if not ex:
@@ -331,7 +297,6 @@ def render_relatorio_colaborador() -> None:
             data_venc_ex = _somar_meses(data_admissao, validade_meses)
         venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_ex, hoje, is_desligado=is_desligado)
         linhas_exame_exibicao.append((ex_id, nome_ex, validade_meses, venc_str, dias_str))
-        linhas_exame_resumo.append({"Exame": nome_ex, "Vencimento": venc_str, "Dias Restantes": dias_str})
 
     venc_por_tipo: dict[str, date] = {}
     for tr in treinamentos:
@@ -343,7 +308,6 @@ def render_relatorio_colaborador() -> None:
                     venc_por_tipo[tipo_tr] = dt_v
 
     linhas_trein_exibicao = []
-    linhas_trein_resumo = []
     for tid in trein_ids_req:
         tr_base = mapa_trein.get(tid)
         if not tr_base:
@@ -353,7 +317,6 @@ def render_relatorio_colaborador() -> None:
         data_venc_tr = venc_por_tipo.get(chave_tr) or _parse_data(tr_base.get("data_vencimento"))
         venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_tr, hoje, is_desligado=is_desligado)
         linhas_trein_exibicao.append((tid, tr_base, nome_tr, venc_str, dias_str))
-        linhas_trein_resumo.append({"Treinamento": nome_tr, "Vencimento": venc_str, "Dias Restantes": dias_str})
 
     tab1, tab2, tab3 = st.tabs([
         "👤 Visão por Colaborador",
@@ -542,25 +505,56 @@ def render_relatorio_colaborador() -> None:
             st.caption("Nenhum treinamento vinculado à função deste colaborador.")
 
     with tab2:
-        st.subheader(f"🕒 Histórico Completo — {nome_colab}")
+        st.subheader(f"🕒 Trocas Realizadas (EPI) e Renovações (Exames e Treinamentos) — {nome_colab}")
+
+        movs_colaborador: list[dict] = []
+
+        for h in historico_trocas:
+            if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
+                eid_h = str(h.get("epi_id") or "").strip()
+                epi_h = mapa_epis.get(eid_h, {})
+                movs_colaborador.append({
+                    "Data Realização": _formatar_data_br(h.get("data_troca")),
+                    "Tipo de Registro": "Troca de EPI",
+                    "Item": str(epi_h.get("descricao") or epi_h.get("nome_epi") or "EPI"),
+                    "Detalhes / Observações": f"Qtd: {h.get('quantidade', 1)} | {h.get('motivo') or 'Troca'}",
+                })
+
+        for ec in exames_colab:
+            if str(ec.get("colaborador_id") or "").strip() == str(colab_id).strip():
+                ex_c = mapa_exames.get(str(ec.get("tipo_exame_id") or "").strip(), {})
+                movs_colaborador.append({
+                    "Data Realização": _formatar_data_br(ec.get("data_realizacao")),
+                    "Tipo de Registro": "Renovação de Exame",
+                    "Item": str(ex_c.get("nome_exame") or "Exame"),
+                    "Detalhes / Observações": str(ec.get("observacoes") or "Exame realizado / renovado"),
+                })
+
+        for tr in treinamentos:
+            if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
+                movs_colaborador.append({
+                    "Data Realização": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_emissao")),
+                    "Tipo de Registro": "Renovação de Treinamento",
+                    "Item": str(tr.get("tipo_treinamento") or "Treinamento"),
+                    "Detalhes / Observações": (
+                        f"{tr.get('tipo_capacitacao') or 'Capacitação'} ({tr.get('carga_horaria') or '—'}h)"
+                    ),
+                })
 
         colab_pdf = dict(colab)
         colab_pdf["data_admissao_br"] = _formatar_data_br(colab.get("data_admissao"))
 
         pdf_bytes, erro_pdf = gerar_pdf_historico_colaborador(
             colab=colab_pdf,
-            linhas_epi=linhas_epi_resumo,
-            linhas_exame=linhas_exame_resumo,
-            linhas_trein=linhas_trein_resumo,
-            historico_eventos=historico_colab_eventos,
+            movimentacoes_realizadas=movs_colaborador,
         )
 
         if erro_pdf:
             st.warning(erro_pdf)
         elif pdf_bytes:
-            nome_arquivo = f"historico_sst_{matricula_colab or nome_colab.replace(' ', '_').lower()}.pdf"
+            nome_arquivo = f"auditoria_sst_{matricula_colab or nome_colab.replace(' ', '_').lower()}.pdf"
             st.download_button(
-                label="🖨️ Imprimir / Baixar Histórico em PDF (Com Logo)",
+                label="🖨️ Imprimir / Baixar PDF para Auditoria / Fiscalização",
                 data=pdf_bytes,
                 file_name=nome_arquivo,
                 mime="application/pdf",
@@ -568,23 +562,35 @@ def render_relatorio_colaborador() -> None:
                 key=f"btn_pdf_colab_{colab_id}",
             )
 
-        if historico_colab_eventos:
-            st.dataframe(pd.DataFrame(historico_colab_eventos), use_container_width=True, hide_index=True)
+        if movs_colaborador:
+            st.dataframe(pd.DataFrame(movs_colaborador), use_container_width=True, hide_index=True)
         else:
-            st.info("Nenhuma troca ou realização registrada para este colaborador até o momento.")
+            st.info("Nenhuma troca de EPI ou renovação de exame/treinamento registrada para este colaborador.")
 
     with tab3:
         st.subheader("🗓️ Consulta Geral de Movimentações por Período")
         p1, p2, p3, p4 = st.columns([2, 2, 2, 2])
         with p1:
-            dt_inicio = st.date_input("Data Inicial", value=date.today() - timedelta(days=30), format="DD/MM/YYYY")
+            dt_inicio = st.date_input(
+                "Data Inicial",
+                value=date.today() - timedelta(days=30),
+                format="DD/MM/YYYY",
+            )
         with p2:
-            dt_fim = st.date_input("Data Final", value=date.today(), format="DD/MM/YYYY")
+            dt_fim = st.date_input(
+                "Data Final",
+                value=date.today(),
+                format="DD/MM/YYYY",
+            )
         with p3:
             filtro_colab_periodo = st.selectbox(
                 "Colaborador",
                 options=["TODOS"] + ids_colabs,
-                format_func=lambda cid: "Todos os Colaboradores" if cid == "TODOS" else str(mapa_colabs[cid].get("nome_completo") or "—"),
+                format_func=lambda cid: (
+                    "Todos os Colaboradores"
+                    if cid == "TODOS"
+                    else str(mapa_colabs[cid].get("nome_completo") or "—")
+                ),
                 key="filtro_colab_periodo",
             )
         with p4:
@@ -652,7 +658,9 @@ def render_relatorio_colaborador() -> None:
                         "Matrícula": col_info.get("matricula") or "—",
                         "Status Colab.": col_info.get("status") or "Ativo",
                         "Item / Evento": tr.get("tipo_treinamento") or "Treinamento",
-                        "Detalhes / Qtd": f"{tr.get('tipo_capacitacao') or ''} ({tr.get('carga_horaria') or ''}h)",
+                        "Detalhes / Qtd": (
+                            f"{tr.get('tipo_capacitacao') or ''} ({tr.get('carga_horaria') or ''}h)"
+                        ),
                         "Novo Vencimento": _formatar_data_br(tr.get("data_vencimento")),
                     })
 
