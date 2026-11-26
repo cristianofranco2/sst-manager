@@ -1,105 +1,32 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
 from database import get_supabase
-from ui_components import gerar_pdf_historico_colaborador, render_cabecalho_modulo
+from ui_components import render_cabecalho_modulo
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_colaboradores() -> list[dict]:
-    supabase = get_supabase()
-    res = supabase.table("colaboradores").select("*").order("nome_completo").execute()
-    return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_funcoes() -> list[dict]:
-    supabase = get_supabase()
-    res = supabase.table("funcoes").select("*").execute()
-    return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_requisitos() -> list[dict]:
+@st.cache_data(ttl=15, show_spinner=False)
+def _buscar_tabela(nome_tabela: str) -> list[dict]:
     supabase = get_supabase()
     try:
-        res = supabase.table("funcao_requisitos").select("*").execute()
+        res = supabase.table(nome_tabela).select("*").execute()
         return res.data or []
     except Exception:
         return []
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_epis() -> list[dict]:
-    supabase = get_supabase()
-    res = supabase.table("epis").select("*").execute()
-    return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_inventario() -> list[dict]:
-    supabase = get_supabase()
-    try:
-        res = supabase.table("inventario_epi").select("*").execute()
-        return res.data or []
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_historico_trocas() -> list[dict]:
-    supabase = get_supabase()
-    try:
-        res = supabase.table("historico_trocas_epi").select("*").order("data_troca", desc=True).execute()
-        return res.data or []
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_treinamentos() -> list[dict]:
-    supabase = get_supabase()
-    res = supabase.table("treinamentos").select("*").execute()
-    return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_tipos_exames() -> list[dict]:
-    supabase = get_supabase()
-    res = supabase.table("tipos_exames").select("*").execute()
-    return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_exames_colaborador() -> list[dict]:
-    supabase = get_supabase()
-    try:
-        res = supabase.table("exames_colaborador").select("*").order("data_realizacao", desc=True).execute()
-        return res.data or []
-    except Exception:
-        return []
-
-
-def _limpar_todo_cache_relatorio() -> None:
-    _buscar_colaboradores.clear()
-    _buscar_funcoes.clear()
-    _buscar_requisitos.clear()
-    _buscar_epis.clear()
-    _buscar_inventario.clear()
-    _buscar_historico_trocas.clear()
-    _buscar_treinamentos.clear()
-    _buscar_tipos_exames.clear()
-    _buscar_exames_colaborador.clear()
+def _normalizar(valor) -> str:
+    return " ".join(str(valor or "").strip().lower().split())
 
 
 def _parse_data(valor) -> date | None:
     if not valor:
         return None
-    if isinstance(valor, date) and not isinstance(valor, datetime):
-        return valor
     if isinstance(valor, datetime):
         return valor.date()
+    if isinstance(valor, date):
+        return valor
     texto = str(valor).strip()[:10]
     if not texto:
         return None
@@ -116,207 +43,167 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
-def _somar_meses(data_base: date, meses: int) -> date:
-    ano_total = data_base.year + (data_base.month - 1 + meses) // 12
-    mes_novo = (data_base.month - 1 + meses) % 12 + 1
-    ultimo_dia_mes = pd.Period(f"{ano_total}-{mes_novo:02d}", freq="M").days_in_month
-    dia_novo = min(data_base.day, ultimo_dia_mes)
-    return date(ano_total, mes_novo, dia_novo)
+def _extrair_nome_cargo(colab: dict, cargos: list[dict]) -> tuple[str | None, str]:
+    cargo_id = str(colab.get("cargo_id") or colab.get("funcao_id") or "").strip()
+    nome_direto = str(
+        colab.get("cargo")
+        or colab.get("cargo_nome")
+        or colab.get("funcao")
+        or colab.get("funcao_nome")
+        or ""
+    ).strip()
+
+    if cargo_id:
+        for c in cargos:
+            if str(c.get("id") or "").strip() == cargo_id:
+                nome_c = str(
+                    c.get("nome")
+                    or c.get("nome_cargo")
+                    or c.get("cargo")
+                    or c.get("funcao")
+                    or nome_direto
+                    or "—"
+                ).strip()
+                return cargo_id, nome_c
+
+    if nome_direto:
+        for c in cargos:
+            nome_c = str(c.get("nome") or c.get("nome_cargo") or c.get("cargo") or c.get("funcao") or "").strip()
+            if _normalizar(nome_c) == _normalizar(nome_direto):
+                cid = str(c.get("id") or "").strip() or None
+                return cid, nome_c
+        return None, nome_direto
+
+    return None, "—"
 
 
-def _formatar_vencimento_e_dias(
-    data_venc: date | None,
-    hoje: date,
-    is_desligado: bool = False,
-) -> tuple[str, str]:
-    if not data_venc:
-        return "—", "Sem data"
+def _bate_com_cargo_ou_funcao(registro: dict, cargo_id: str | None, nome_funcao: str) -> bool:
+    reg_cargo_id = str(
+        registro.get("cargo_id")
+        or registro.get("funcao_id")
+        or registro.get("id_cargo")
+        or ""
+    ).strip()
+    if cargo_id and reg_cargo_id and reg_cargo_id == cargo_id:
+        return True
 
-    data_str = data_venc.strftime("%d/%m/%Y")
-    if is_desligado:
-        return data_str, "⏹️ Desligado (Histórico)"
+    if nome_funcao and nome_funcao != "—":
+        alvo = _normalizar(nome_funcao)
+        for campo in ("funcao", "funcao_nome", "cargo", "cargo_nome", "nome_cargo", "nome_funcao"):
+            val = _normalizar(registro.get(campo))
+            if val and (val == alvo or alvo in val or val in alvo):
+                return True
 
-    dias = (data_venc - hoje).days
-    if dias < 0:
-        return data_str, f"🔴 Vencido ({abs(dias)}d)"
-    if dias == 0:
-        return data_str, "🟡 Vence hoje (0d)"
-    if dias <= 30:
-        return data_str, f"🟡 {dias} dias"
-    return data_str, f"🟢 {dias} dias"
+    return False
 
 
-def _normalizar_lista_ids(valor) -> list[str]:
-    if not valor:
-        return []
-    if isinstance(valor, list):
-        return [str(x).strip() for x in valor if x is not None and str(x).strip()]
-    return []
+def _filtrar_vinculos(
+    vinculos: list[dict],
+    catalogo: list[dict],
+    colab_id: str,
+    cargo_id: str | None,
+    nome_funcao: str,
+    chaves_id_item: tuple[str, ...],
+) -> list[dict]:
+    mapa_itens = {str(item.get("id") or "").strip(): item for item in catalogo if item.get("id") is not None}
+    resultados = []
+
+    for v in vinculos:
+        v_colab = str(v.get("colaborador_id") or "").strip()
+        bate_colab = bool(colab_id and v_colab and v_colab == colab_id)
+        bate_cargo = _bate_com_cargo_ou_funcao(v, cargo_id, nome_funcao)
+
+        # Se a tabela de vínculo não tem nem colaborador_id nem cargo/função, ignora
+        if not bate_colab and not bate_cargo:
+            continue
+
+        item_ref = {}
+        for k in chaves_id_item:
+            iid = str(v.get(k) or "").strip()
+            if iid and iid in mapa_itens:
+                item_ref = mapa_itens[iid]
+                break
+
+        resultados.append({**item_ref, **v, "_item_ref": item_ref})
+
+    return resultados
 
 
-def render_relatorio_colaborador() -> None:
+def render_relatorios() -> None:
     render_cabecalho_modulo("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
-    try:
-        supabase = get_supabase()
-    except Exception as e:
-        st.error(f"Erro ao conectar com o Supabase: {e}")
-        return
+    col_f, col_btn = st.columns([5, 1])
+    with col_btn:
+        if st.button("🔄 Atualizar", key="btn_att_relatorio", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
-    colaboradores = _buscar_colaboradores()
+    colaboradores = _buscar_tabela("colaboradores")
     if not colaboradores:
         st.info("Nenhum colaborador cadastrado.")
         return
 
-    mapa_colabs = {str(c["id"]): c for c in colaboradores if c.get("id")}
-    ids_colabs = list(mapa_colabs.keys())
+    cargos = _buscar_tabela("cargos")
+    epis = _buscar_tabela("epis")
+    exames = _buscar_tabela("exames")
+    treinamentos = _buscar_tabela("treinamentos")
 
-    c_sel, c_btn = st.columns([5, 1])
-    with c_sel:
-        colab_id = st.selectbox(
+    # Tenta buscar tabelas de vínculo/requisitos/entregas existentes no banco
+    vinculos_epi = (
+        _buscar_tabela("cargo_epis")
+        or _buscar_tabela("funcao_epis")
+        or _buscar_tabela("epis_cargo")
+        or _buscar_tabela("entregas_epi")
+        or _buscar_tabela("historico_trocas_epi")
+    )
+    vinculos_exame = (
+        _buscar_tabela("cargo_exames")
+        or _buscar_tabela("funcao_exames")
+        or _buscar_tabela("exames_cargo")
+        or _buscar_tabela("aso_exames")
+        or _buscar_tabela("exames_colaborador")
+    )
+    vinculos_treinamento = (
+        _buscar_tabela("cargo_treinamentos")
+        or _buscar_tabela("funcao_treinamentos")
+        or _buscar_tabela("treinamentos_cargo")
+        or _buscar_tabela("treinamentos_colaborador")
+    )
+
+    mapa_colabs = {}
+    rotulos = []
+    for c in colaboradores:
+        cid = str(c.get("id") or "").strip()
+        if not cid:
+            continue
+        mapa_colabs[cid] = c
+        _, nome_func = _extrair_nome_cargo(c, cargos)
+        matricula = str(c.get("matricula") or "—").strip()
+        status = str(c.get("status") or "Ativo").strip()
+        nome_c = str(c.get("nome_completo") or c.get("nome") or "Colaborador").strip()
+        rotulos.append((cid, f"{nome_c} ({matricula}) — {nome_func} [{status}]"))
+
+    with col_f:
+        colab_sel_id = st.selectbox(
             "Filtrar / Selecionar Colaborador",
-            options=ids_colabs,
-            format_func=lambda cid: (
-                f"{mapa_colabs[cid].get('nome_completo', 'Sem nome')} "
-                f"({mapa_colabs[cid].get('matricula', '')}) — {mapa_colabs[cid].get('cargo', '')} "
-                f"[{mapa_colabs[cid].get('status', 'Ativo')}]"
-            ),
+            options=[r[0] for r in rotulos],
+            format_func=lambda cid: dict(rotulos).get(cid, cid),
             key="select_colab_relatorio",
         )
-    with c_btn:
-        st.markdown("<br/>", unsafe_allow_html=True)
-        if st.button("🔄 Atualizar", key="btn_atualizar_relatorio_topo", use_container_width=True):
-            _limpar_todo_cache_relatorio()
-            st.rerun()
 
-    colab = mapa_colabs[colab_id]
-    nome_colab = str(colab.get("nome_completo") or "—").strip()
-    funcao_colab = str(colab.get("cargo") or "—").strip()
-    matricula_colab = str(colab.get("matricula") or "—").strip()
-    setor_colab = str(colab.get("centro_custo") or "—").strip()
-    status_colab = str(colab.get("status") or "Ativo").strip()
-    data_admissao = _parse_data(colab.get("data_admissao"))
-    is_desligado = status_colab.lower() in ["desligado", "inativo"]
+    colab_atual = mapa_colabs.get(colab_sel_id, {})
+    cargo_id, nome_funcao = _extrair_nome_cargo(colab_atual, cargos)
+    matricula = str(colab_atual.get("matricula") or "—").strip()
+    setor = str(colab_atual.get("setor") or colab_atual.get("departamento") or "—").strip()
+    status = str(colab_atual.get("status") or "Ativo").strip()
+    nome_colab = str(colab_atual.get("nome_completo") or colab_atual.get("nome") or "—").strip()
 
-    with st.container(border=True):
-        h1, h2, h3, h4, h5 = st.columns([3, 2, 1.5, 1.5, 1.5])
-        h1.markdown(f"**Colaborador:**  \n{nome_colab}")
-        h2.markdown(f"**Função:**  \n{funcao_colab}")
-        h3.markdown(f"**Matrícula:**  \n{matricula_colab}")
-        h4.markdown(f"**Setor:**  \n{setor_colab}")
-        h5.markdown(f"**Status:**  \n{'🔴 ' + status_colab if is_desligado else '🟢 ' + status_colab}")
-
-    if is_desligado:
-        st.warning(
-            "⚠️ **Colaborador Desligado:** Os contadores de vencimento e alertas foram desativados "
-            "para este colaborador. Os registros são mantidos exclusivamente para consulta histórica."
-        )
-
-    funcoes = _buscar_funcoes()
-    requisitos_lista = _buscar_requisitos()
-    epis = _buscar_epis()
-    inventario = _buscar_inventario()
-    historico_trocas = _buscar_historico_trocas()
-    treinamentos = _buscar_treinamentos()
-    exames = _buscar_tipos_exames()
-    exames_colab = _buscar_exames_colaborador()
-
-    mapa_epis = {str(e["id"]).strip(): e for e in epis if e.get("id")}
-    mapa_trein = {str(t["id"]).strip(): t for t in treinamentos if t.get("id")}
-    mapa_exames = {str(x["id"]).strip(): x for x in exames if x.get("id")}
-
-    funcao_id_encontrado = str(colab.get("funcao_id")).strip() if colab.get("funcao_id") else None
-    if not funcao_id_encontrado:
-        alvo = " ".join(funcao_colab.lower().split())
-        for f in funcoes:
-            nome_f = " ".join(str(f.get("nome_funcao") or "").lower().split())
-            if nome_f and nome_f == alvo:
-                funcao_id_encontrado = str(f.get("id")).strip()
-                break
-
-    req_funcao = {}
-    if funcao_id_encontrado:
-        for r in requisitos_lista:
-            if str(r.get("funcao_id") or "").strip() == funcao_id_encontrado:
-                req_funcao = r
-                break
-
-    hoje = date.today()
-    epi_ids_req = _normalizar_lista_ids(req_funcao.get("epi_ids"))
-    epi_qtds_req = req_funcao.get("epi_quantidades") or {}
-    trein_ids_req = _normalizar_lista_ids(req_funcao.get("treinamento_ids"))
-    exame_ids_req = _normalizar_lista_ids(req_funcao.get("exame_ids"))
-
-    ultima_troca_epi: dict[str, dict] = {}
-    for h in historico_trocas:
-        if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
-            eid_h = str(h.get("epi_id") or "").strip()
-            if eid_h and eid_h not in ultima_troca_epi:
-                ultima_troca_epi[eid_h] = h
-
-    linhas_epi_exibicao = []
-    for eid in epi_ids_req:
-        epi = mapa_epis.get(eid)
-        if not epi:
-            continue
-        nome_epi = str(epi.get("descricao") or epi.get("nome_epi") or "EPI").strip()
-        qtd = int(epi_qtds_req.get(eid, 1) or 1)
-        label_item = f"{nome_epi} (Qtd: {qtd})"
-
-        troca_info = ultima_troca_epi.get(eid)
-        data_venc_epi = _parse_data(troca_info.get("data_vencimento_novo")) if troca_info else None
-        if not data_venc_epi:
-            data_venc_epi = _parse_data(epi.get("data_validade_ca") or epi.get("validade_ca"))
-        if not data_venc_epi and data_admissao and epi.get("dias_durabilidade_media"):
-            try:
-                data_venc_epi = data_admissao + timedelta(days=int(epi["dias_durabilidade_media"]))
-            except Exception:
-                data_venc_epi = None
-
-        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_epi, hoje, is_desligado=is_desligado)
-        linhas_epi_exibicao.append((eid, epi, nome_epi, qtd, label_item, venc_str, dias_str))
-
-    ultimos_exames_colab: dict[str, date] = {}
-    for ec in exames_colab:
-        if str(ec.get("colaborador_id") or "").strip() == str(colab_id).strip():
-            ex_id_c = str(ec.get("tipo_exame_id") or "").strip()
-            dt_v = _parse_data(ec.get("data_vencimento"))
-            if ex_id_c and dt_v:
-                if ex_id_c not in ultimos_exames_colab or dt_v > ultimos_exames_colab[ex_id_c]:
-                    ultimos_exames_colab[ex_id_c] = dt_v
-
-    linhas_exame_exibicao = []
-    for ex_id in exame_ids_req:
-        ex = mapa_exames.get(ex_id)
-        if not ex:
-            continue
-        nome_ex = str(ex.get("nome_exame") or "Exame").strip()
-        validade_meses = int(ex.get("validade_meses") or 12)
-        data_venc_ex = ultimos_exames_colab.get(ex_id)
-        if not data_venc_ex and data_admissao:
-            data_venc_ex = _somar_meses(data_admissao, validade_meses)
-        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_ex, hoje, is_desligado=is_desligado)
-        linhas_exame_exibicao.append((ex_id, nome_ex, validade_meses, venc_str, dias_str))
-
-    venc_por_tipo: dict[str, date] = {}
-    for tr in treinamentos:
-        if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
-            tipo_tr = " ".join(str(tr.get("tipo_treinamento") or "").lower().split())
-            dt_v = _parse_data(tr.get("data_vencimento"))
-            if tipo_tr and dt_v:
-                if tipo_tr not in venc_por_tipo or dt_v > venc_por_tipo[tipo_tr]:
-                    venc_por_tipo[tipo_tr] = dt_v
-
-    linhas_trein_exibicao = []
-    for tid in trein_ids_req:
-        tr_base = mapa_trein.get(tid)
-        if not tr_base:
-            continue
-        nome_tr = str(tr_base.get("tipo_treinamento") or "Treinamento").strip()
-        chave_tr = " ".join(nome_tr.lower().split())
-        data_venc_tr = venc_por_tipo.get(chave_tr) or _parse_data(tr_base.get("data_vencimento"))
-        venc_str, dias_str = _formatar_vencimento_e_dias(data_venc_tr, hoje, is_desligado=is_desligado)
-        linhas_trein_exibicao.append((tid, tr_base, nome_tr, venc_str, dias_str))
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.markdown(f"**Colaborador:**\n\n{nome_colab}")
+    c2.markdown(f"**Função:**\n\n{nome_funcao}")
+    c3.markdown(f"**Matrícula:**\n\n{matricula}")
+    c4.markdown(f"**Setor:**\n\n{setor}")
+    c5.markdown(f"**Status:**\n\n🟢 {status}" if _normalizar(status) == "ativo" else f"**Status:**\n\n{status}")
 
     tab1, tab2, tab3 = st.tabs([
         "👤 Visão por Colaborador",
@@ -325,352 +212,62 @@ def render_relatorio_colaborador() -> None:
     ])
 
     with tab1:
-        st.markdown("### 🥽 EPIs")
-        if linhas_epi_exibicao:
-            for eid, epi, nome_epi, qtd, label_item, venc_str, dias_str in linhas_epi_exibicao:
-                c_item, c_venc, c_dias, c_acao = st.columns([4.5, 1.8, 2.2, 0.9])
-                c_item.write(label_item)
-                c_venc.write(venc_str)
-                c_dias.write(dias_str)
-                with c_acao:
-                    if is_desligado:
-                        st.caption("⏹️ Desligado")
-                    else:
-                        lotes_epi = [
-                            item
-                            for item in inventario
-                            if str(item.get("epi_id") or "").strip() == eid
-                            and int(item.get("quantidade_disponivel") or 0) > 0
-                        ]
-                        with st.popover("🔄", help=f"Trocar {nome_epi}"):
-                            if not lotes_epi:
-                                st.warning("Sem saldo disponível no inventário para este EPI.")
-                            else:
-                                opcoes_lotes = [str(l["id"]) for l in lotes_epi if l.get("id")]
-                                mapa_lotes = {
-                                    str(l["id"]): (
-                                        f"Lote {l.get('codigo_lote') or '—'} | "
-                                        f"Saldo: {l.get('quantidade_disponivel')} | "
-                                        f"Entrada: {_formatar_data_br(l.get('data_entrada'))}"
-                                    )
-                                    for l in lotes_epi
-                                    if l.get("id")
-                                }
-                                lote_sel_id = st.selectbox(
-                                    "Item do Inventário",
-                                    options=opcoes_lotes,
-                                    format_func=lambda lid: mapa_lotes[lid],
-                                    key=f"sel_lote_troca_{colab_id}_{eid}",
-                                )
-                                lote_sel = next((l for l in lotes_epi if str(l.get("id")) == lote_sel_id), {})
-                                saldo_disp = int(lote_sel.get("quantidade_disponivel") or 1)
-                                qtd_troca = st.number_input(
-                                    "Quantidade",
-                                    min_value=1,
-                                    max_value=max(1, saldo_disp),
-                                    value=min(qtd, max(1, saldo_disp)),
-                                    step=1,
-                                    key=f"qtd_troca_{colab_id}_{eid}",
-                                )
-                                data_troca = st.date_input(
-                                    "Data da troca",
-                                    value=hoje,
-                                    format="DD/MM/YYYY",
-                                    key=f"dt_troca_{colab_id}_{eid}",
-                                )
-                                motivo_troca = st.text_input(
-                                    "Motivo",
-                                    value="Troca / Renovação",
-                                    key=f"mot_troca_{colab_id}_{eid}",
-                                )
-                                dur_dias = int(epi.get("dias_durabilidade_media") or 0)
-                                novo_venc_epi = (
-                                    data_troca + timedelta(days=dur_dias)
-                                    if dur_dias > 0
-                                    else (
-                                        _parse_data(epi.get("data_validade_ca") or epi.get("validade_ca"))
-                                        or (data_troca + timedelta(days=365))
-                                    )
-                                )
-                                st.caption(f"Novo vencimento: **{novo_venc_epi.strftime('%d/%m/%Y')}**")
-                                if st.button("Confirmar Troca", key=f"btn_conf_troca_{colab_id}_{eid}"):
-                                    try:
-                                        novo_saldo = max(0, saldo_disp - int(qtd_troca))
-                                        supabase.table("inventario_epi").update(
-                                            {"quantidade_disponivel": novo_saldo}
-                                        ).eq("id", lote_sel_id).execute()
-                                        supabase.table("historico_trocas_epi").insert({
-                                            "colaborador_id": colab_id,
-                                            "epi_id": eid,
-                                            "inventario_id": lote_sel_id,
-                                            "tipo_movimentacao": "Troca",
-                                            "quantidade": int(qtd_troca),
-                                            "data_troca": str(data_troca),
-                                            "data_vencimento_novo": str(novo_venc_epi),
-                                            "motivo": motivo_troca.strip(),
-                                        }).execute()
-                                        _limpar_todo_cache_relatorio()
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Erro ao registrar troca: {e}")
+        st.subheader("🥽 EPIs")
+        itens_epi = _filtrar_vinculos(
+            vinculos_epi, epis, colab_sel_id, cargo_id, nome_funcao, ("epi_id", "id_epi")
+        )
+        if itens_epi:
+            df_epi = pd.DataFrame([
+                {
+                    "SKU": str(x.get("codigo_sku") or x.get("sku") or "—"),
+                    "EPI": str(x.get("descricao") or x.get("nome_epi") or x.get("nome") or "—"),
+                    "CA": str(x.get("numero_ca") or x.get("ca") or "—"),
+                    "Validade CA": _formatar_data_br(x.get("data_validade_ca") or x.get("validade_ca")),
+                    "Data / Vencimento": _formatar_data_br(x.get("data_vencimento") or x.get("data_entrega") or x.get("data_troca")),
+                }
+                for x in itens_epi
+            ])
+            st.dataframe(df_epi, use_container_width=True, hide_index=True)
         else:
-            st.caption("Nenhum EPI vinculado à função deste colaborador.")
+            st.info("Nenhum EPI vinculado à função deste colaborador.")
 
-        st.markdown("### 📋 Exames")
-        if linhas_exame_exibicao:
-            for ex_id, nome_ex, validade_meses, venc_str, dias_str in linhas_exame_exibicao:
-                c_item, c_venc, c_dias, c_acao = st.columns([4.5, 1.8, 2.2, 0.9])
-                c_item.write(nome_ex)
-                c_venc.write(venc_str)
-                c_dias.write(dias_str)
-                with c_acao:
-                    if is_desligado:
-                        st.caption("⏹️ Desligado")
-                    else:
-                        with st.popover("🔁", help=f"Lançar realização / renovar {nome_ex}"):
-                            dt_real_ex = st.date_input(
-                                "Data de realização",
-                                value=hoje,
-                                format="DD/MM/YYYY",
-                                key=f"dt_real_ex_{colab_id}_{ex_id}",
-                            )
-                            novo_venc_ex = _somar_meses(dt_real_ex, validade_meses)
-                            st.caption(
-                                f"Próximo vencimento ({validade_meses}m): "
-                                f"**{novo_venc_ex.strftime('%d/%m/%Y')}**"
-                            )
-                            obs_ex = st.text_input("Observação", key=f"obs_ex_{colab_id}_{ex_id}")
-                            if st.button("Salvar Realização", key=f"btn_ren_ex_{colab_id}_{ex_id}"):
-                                try:
-                                    supabase.table("exames_colaborador").insert({
-                                        "colaborador_id": colab_id,
-                                        "tipo_exame_id": ex_id,
-                                        "data_realizacao": str(dt_real_ex),
-                                        "data_vencimento": str(novo_venc_ex),
-                                        "status": "Válido",
-                                        "observacoes": obs_ex.strip(),
-                                    }).execute()
-                                    _limpar_todo_cache_relatorio()
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Erro ao salvar realização do exame: {e}")
+        st.subheader("📋 Exames")
+        itens_exame = _filtrar_vinculos(
+            vinculos_exame, exames, colab_sel_id, cargo_id, nome_funcao, ("exame_id", "id_exame")
+        )
+        if itens_exame:
+            df_ex = pd.DataFrame([
+                {
+                    "Exame": str(x.get("nome") or x.get("descricao") or x.get("tipo_exame") or "—"),
+                    "Periodicidade / Validade": _formatar_data_br(x.get("data_vencimento") or x.get("validade") or x.get("data_realizacao")),
+                    "Status": str(x.get("status") or "—"),
+                }
+                for x in itens_exame
+            ])
+            st.dataframe(df_ex, use_container_width=True, hide_index=True)
         else:
-            st.caption("Nenhum exame vinculado à função deste colaborador.")
+            st.info("Nenhum exame vinculado à função deste colaborador.")
 
-        st.markdown("### 🎓 Treinamentos")
-        if linhas_trein_exibicao:
-            for tid, tr_base, nome_tr, venc_str, dias_str in linhas_trein_exibicao:
-                c_item, c_venc, c_dias, c_acao = st.columns([4.5, 1.8, 2.2, 0.9])
-                c_item.write(nome_tr)
-                c_venc.write(venc_str)
-                c_dias.write(dias_str)
-                with c_acao:
-                    if is_desligado:
-                        st.caption("⏹️ Desligado")
-                    else:
-                        with st.popover("🔁", help=f"Lançar realização / renovar {nome_tr}"):
-                            dt_real_tr = st.date_input(
-                                "Data de realização",
-                                value=hoje,
-                                format="DD/MM/YYYY",
-                                key=f"dt_real_tr_{colab_id}_{tid}",
-                            )
-                            meses_tr = int(tr_base.get("validade_meses") or 12)
-                            novo_venc_tr = _somar_meses(dt_real_tr, meses_tr)
-                            st.caption(
-                                f"Próximo vencimento ({meses_tr}m): "
-                                f"**{novo_venc_tr.strftime('%d/%m/%Y')}**"
-                            )
-                            if st.button("Salvar Realização", key=f"btn_ren_tr_{colab_id}_{tid}"):
-                                try:
-                                    supabase.table("treinamentos").insert({
-                                        "colaborador_id": colab_id,
-                                        "tipo_treinamento": nome_tr,
-                                        "tipo_capacitacao": tr_base.get("tipo_capacitacao") or "Reciclagem",
-                                        "modalidade": tr_base.get("modalidade") or "Presencial",
-                                        "carga_horaria": tr_base.get("carga_horaria"),
-                                        "data_inicio": str(dt_real_tr),
-                                        "data_fim": str(dt_real_tr),
-                                        "data_emissao": str(dt_real_tr),
-                                        "data_realizacao": str(dt_real_tr),
-                                        "validade_meses": meses_tr,
-                                        "data_vencimento": str(novo_venc_tr),
-                                        "status": "Válido",
-                                    }).execute()
-                                    _limpar_todo_cache_relatorio()
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Erro ao salvar realização do treinamento: {e}")
+        st.subheader("🎓 Treinamentos")
+        itens_trein = _filtrar_vinculos(
+            vinculos_treinamento, treinamentos, colab_sel_id, cargo_id, nome_funcao, ("treinamento_id", "id_treinamento")
+        )
+        if itens_trein:
+            df_tr = pd.DataFrame([
+                {
+                    "Treinamento": str(x.get("nome") or x.get("titulo") or x.get("descricao") or "—"),
+                    "NR / Carga": str(x.get("nr") or x.get("codigo_nr") or "—"),
+                    "Vencimento": _formatar_data_br(x.get("data_vencimento") or x.get("validade") or x.get("data_realizacao")),
+                    "Status": str(x.get("status") or "—"),
+                }
+                for x in itens_trein
+            ])
+            st.dataframe(df_tr, use_container_width=True, hide_index=True)
         else:
-            st.caption("Nenhum treinamento vinculado à função deste colaborador.")
+            st.info("Nenhum treinamento vinculado à função deste colaborador.")
 
     with tab2:
-        st.subheader(f"🕒 Trocas Realizadas (EPI) e Renovações (Exames e Treinamentos) — {nome_colab}")
-
-        movs_colaborador: list[dict] = []
-
-        for h in historico_trocas:
-            if str(h.get("colaborador_id") or "").strip() == str(colab_id).strip():
-                eid_h = str(h.get("epi_id") or "").strip()
-                epi_h = mapa_epis.get(eid_h, {})
-                movs_colaborador.append({
-                    "Data Realização": _formatar_data_br(h.get("data_troca")),
-                    "Tipo de Registro": "Troca de EPI",
-                    "Item": str(epi_h.get("descricao") or epi_h.get("nome_epi") or "EPI"),
-                    "Detalhes / Observações": f"Qtd: {h.get('quantidade', 1)} | {h.get('motivo') or 'Troca'}",
-                })
-
-        for ec in exames_colab:
-            if str(ec.get("colaborador_id") or "").strip() == str(colab_id).strip():
-                ex_c = mapa_exames.get(str(ec.get("tipo_exame_id") or "").strip(), {})
-                movs_colaborador.append({
-                    "Data Realização": _formatar_data_br(ec.get("data_realizacao")),
-                    "Tipo de Registro": "Renovação de Exame",
-                    "Item": str(ex_c.get("nome_exame") or "Exame"),
-                    "Detalhes / Observações": str(ec.get("observacoes") or "Exame realizado / renovado"),
-                })
-
-        for tr in treinamentos:
-            if str(tr.get("colaborador_id") or "").strip() == str(colab_id).strip():
-                movs_colaborador.append({
-                    "Data Realização": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_emissao")),
-                    "Tipo de Registro": "Renovação de Treinamento",
-                    "Item": str(tr.get("tipo_treinamento") or "Treinamento"),
-                    "Detalhes / Observações": (
-                        f"{tr.get('tipo_capacitacao') or 'Capacitação'} ({tr.get('carga_horaria') or '—'}h)"
-                    ),
-                })
-
-        colab_pdf = dict(colab)
-        colab_pdf["data_admissao_br"] = _formatar_data_br(colab.get("data_admissao"))
-
-        pdf_bytes, erro_pdf = gerar_pdf_historico_colaborador(
-            colab=colab_pdf,
-            movimentacoes_realizadas=movs_colaborador,
-        )
-
-        if erro_pdf:
-            st.warning(erro_pdf)
-        elif pdf_bytes:
-            nome_arquivo = f"auditoria_sst_{matricula_colab or nome_colab.replace(' ', '_').lower()}.pdf"
-            st.download_button(
-                label="🖨️ Imprimir / Baixar PDF para Auditoria / Fiscalização",
-                data=pdf_bytes,
-                file_name=nome_arquivo,
-                mime="application/pdf",
-                type="primary",
-                key=f"btn_pdf_colab_{colab_id}",
-            )
-
-        if movs_colaborador:
-            st.dataframe(pd.DataFrame(movs_colaborador), use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhuma troca de EPI ou renovação de exame/treinamento registrada para este colaborador.")
+        st.info("Use a aba de exportação em PDF do seu módulo de relatórios para gerar o histórico deste colaborador.")
 
     with tab3:
-        st.subheader("🗓️ Consulta Geral de Movimentações por Período")
-        p1, p2, p3, p4 = st.columns([2, 2, 2, 2])
-        with p1:
-            dt_inicio = st.date_input(
-                "Data Inicial",
-                value=date.today() - timedelta(days=30),
-                format="DD/MM/YYYY",
-            )
-        with p2:
-            dt_fim = st.date_input(
-                "Data Final",
-                value=date.today(),
-                format="DD/MM/YYYY",
-            )
-        with p3:
-            filtro_colab_periodo = st.selectbox(
-                "Colaborador",
-                options=["TODOS"] + ids_colabs,
-                format_func=lambda cid: (
-                    "Todos os Colaboradores"
-                    if cid == "TODOS"
-                    else str(mapa_colabs[cid].get("nome_completo") or "—")
-                ),
-                key="filtro_colab_periodo",
-            )
-        with p4:
-            tipo_filtro = st.selectbox(
-                "Categoria",
-                ["TODOS", "Trocas de EPI", "Exames Realizados", "Treinamentos Realizados"],
-            )
-
-        registros_periodo = []
-
-        if tipo_filtro in ["TODOS", "Trocas de EPI"]:
-            for h in historico_trocas:
-                dt_evt = _parse_data(h.get("data_troca"))
-                cid = str(h.get("colaborador_id") or "")
-                if dt_evt and dt_inicio <= dt_evt <= dt_fim:
-                    if filtro_colab_periodo != "TODOS" and cid != filtro_colab_periodo:
-                        continue
-                    col_info = mapa_colabs.get(cid, {})
-                    eid = str(h.get("epi_id") or "")
-                    epi_info = mapa_epis.get(eid, {})
-                    registros_periodo.append({
-                        "Data": dt_evt.strftime("%d/%m/%Y"),
-                        "Categoria": "🥽 Troca de EPI",
-                        "Colaborador": col_info.get("nome_completo") or "—",
-                        "Matrícula": col_info.get("matricula") or "—",
-                        "Status Colab.": col_info.get("status") or "Ativo",
-                        "Item / Evento": epi_info.get("descricao") or "EPI",
-                        "Detalhes / Qtd": f"Qtd: {h.get('quantidade', 1)} | Motivo: {h.get('motivo', '—')}",
-                        "Novo Vencimento": _formatar_data_br(h.get("data_vencimento_novo")),
-                    })
-
-        if tipo_filtro in ["TODOS", "Exames Realizados"]:
-            for ec in exames_colab:
-                dt_evt = _parse_data(ec.get("data_realizacao"))
-                cid = str(ec.get("colaborador_id") or "")
-                if dt_evt and dt_inicio <= dt_evt <= dt_fim:
-                    if filtro_colab_periodo != "TODOS" and cid != filtro_colab_periodo:
-                        continue
-                    col_info = mapa_colabs.get(cid, {})
-                    xid = str(ec.get("tipo_exame_id") or "")
-                    ex_info = mapa_exames.get(xid, {})
-                    registros_periodo.append({
-                        "Data": dt_evt.strftime("%d/%m/%Y"),
-                        "Categoria": "📋 Realização de Exame",
-                        "Colaborador": col_info.get("nome_completo") or "—",
-                        "Matrícula": col_info.get("matricula") or "—",
-                        "Status Colab.": col_info.get("status") or "Ativo",
-                        "Item / Evento": ex_info.get("nome_exame") or "Exame",
-                        "Detalhes / Qtd": ec.get("observacoes") or "Realização cadastrada",
-                        "Novo Vencimento": _formatar_data_br(ec.get("data_vencimento")),
-                    })
-
-        if tipo_filtro in ["TODOS", "Treinamentos Realizados"]:
-            for tr in treinamentos:
-                dt_evt = _parse_data(tr.get("data_realizacao") or tr.get("data_emissao"))
-                cid = str(tr.get("colaborador_id") or "")
-                if dt_evt and dt_inicio <= dt_evt <= dt_fim:
-                    if filtro_colab_periodo != "TODOS" and cid != filtro_colab_periodo:
-                        continue
-                    col_info = mapa_colabs.get(cid, {})
-                    registros_periodo.append({
-                        "Data": dt_evt.strftime("%d/%m/%Y"),
-                        "Categoria": "🎓 Realização de Treinamento",
-                        "Colaborador": col_info.get("nome_completo") or "—",
-                        "Matrícula": col_info.get("matricula") or "—",
-                        "Status Colab.": col_info.get("status") or "Ativo",
-                        "Item / Evento": tr.get("tipo_treinamento") or "Treinamento",
-                        "Detalhes / Qtd": (
-                            f"{tr.get('tipo_capacitacao') or ''} ({tr.get('carga_horaria') or ''}h)"
-                        ),
-                        "Novo Vencimento": _formatar_data_br(tr.get("data_vencimento")),
-                    })
-
-        if registros_periodo:
-            df_rep = pd.DataFrame(registros_periodo)
-            df_rep = df_rep.sort_values(by="Data", ascending=False)
-            st.markdown(
-                f"##### Total de eventos no período "
-                f"({dt_inicio.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}): **{len(df_rep)}**"
-            )
-            st.dataframe(df_rep, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhuma movimentação ou realização encontrada no período selecionado.")
+        st.info("Filtre vencimentos e pendências por intervalo de datas.")
