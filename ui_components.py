@@ -161,14 +161,15 @@ def render_cabecalho_modulo(titulo: str, subtitulo: str = "") -> None:
     logo_b64 = base64.b64encode(obter_logo_bytes()).decode("utf-8")
     st.markdown(
         f"""
-        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; margin-bottom: 12px;">
-            <img src="data:image/png;base64,{logo_b64}" alt="GLOBEX MULTIMODAL" style="max-height: 82px; width: auto; object-fit: contain; margin-bottom: 6px;" />
-            <h1 style="margin: 4px 0 0 0; font-size: 2rem; font-weight: 700; color: #1E293B;">{titulo}</h1>
-            {f'<p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #64748B;">{subtitulo}</p>' if subtitulo else ''}
+        <div style="display: flex; justify-content: center; align-items: center; width: 100%; margin-bottom: 10px;">
+            <img src="data:image/png;base64,{logo_b64}" alt="GLOBEX MULTIMODAL" style="max-height: 155px; max-width: 420px; width: auto; object-fit: contain;" />
         </div>
         """,
         unsafe_allow_html=True,
     )
+    st.title(titulo)
+    if subtitulo:
+        st.caption(subtitulo)
 
 
 def gerar_pdf_historico_colaborador(
