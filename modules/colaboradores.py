@@ -181,9 +181,11 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         else "MASCULINO"
     )
 
-    val_num_reg = (
+    val_num_mat_aloc = (
         str(
-            colab_editar.get("numero_registro")
+            colab_editar.get("numero_matricula")
+            or colab_editar.get("matricula")
+            or colab_editar.get("numero_registro")
             or colab_editar.get("num_registro")
             or colab_editar.get("registro")
             or ""
@@ -264,7 +266,9 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
 
         cd4, cd5, cd6 = st.columns(3)
         with cd4:
-            numero_registro = st.text_input("Nº do Registro", value=val_num_reg, placeholder="EX: REG-998877")
+            num_matricula_aloc = st.text_input(
+                "Nº da Matrícula", value=val_num_mat_aloc, placeholder="EX: MAT-998877"
+            )
         with cd5:
             setor = st.text_input("Setor / Centro de Custo", value=val_setor, placeholder="EX: OPERAÇÃO")
         with cd6:
@@ -300,15 +304,18 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
 
         btn_rotulo = "💾 Salvar Alterações" if modo_edicao else "💾 Cadastrar Colaborador"
         if st.form_submit_button(btn_rotulo):
-            mat_limpa = matricula.strip().upper()
+            mat_aloc_limpa = num_matricula_aloc.strip().upper()
+            mat_limpa = (matricula.strip() or mat_aloc_limpa).upper()
             nome_limpo = nome_completo.strip().upper()
 
             if not mat_limpa or not nome_limpo:
                 st.warning("Preencha os campos obrigatórios: Matrícula e Nome Completo.")
             else:
                 try:
+                    mat_final = mat_aloc_limpa or mat_limpa
                     payload = {
-                        "matricula": mat_limpa,
+                        "matricula": mat_final,
+                        "numero_matricula": mat_aloc_limpa or mat_final,
                         "cpf": cpf.strip().upper(),
                         "data_nascimento": str(dt_nasc),
                         "data_nasc": str(dt_nasc),
@@ -323,9 +330,6 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
                         "cbo": cbo_auto.upper(),
                         "data_admissao": str(dt_admissao),
                         "admissao": str(dt_admissao),
-                        "numero_registro": numero_registro.strip().upper(),
-                        "num_registro": numero_registro.strip().upper(),
-                        "registro": numero_registro.strip().upper(),
                         "setor": setor.strip().upper(),
                         "centro_custo": setor.strip().upper(),
                         "tipo_contrato": tipo_contrato.strip().upper(),
@@ -398,10 +402,9 @@ def render_colaboradores() -> None:
                 cbo_str = str(cargo_info.get("cbo") or colab.get("cbo") or "—").strip().upper()
 
                 setor_str = str(colab.get("setor") or colab.get("centro_custo") or "—").strip().upper()
-                num_reg_str = str(
-                    colab.get("numero_registro")
-                    or colab.get("num_registro")
-                    or colab.get("registro")
+                num_mat_str = str(
+                    colab.get("numero_matricula")
+                    or colab.get("matricula")
                     or "—"
                 ).strip().upper()
                 status_str = str(colab.get("status") or "ATIVO").strip().upper()
@@ -411,7 +414,7 @@ def render_colaboradores() -> None:
                     c_cols[0].markdown(f"**Matrícula:**  \n{mat_str}")
                     c_cols[1].markdown(f"**Nome:**  \n{nome_str}")
                     c_cols[2].markdown(f"**CPF:**  \n{cpf_str}")
-                    c_cols[3].markdown(f"**Nº Reg.:**  \n{num_reg_str}")
+                    c_cols[3].markdown(f"**Nº Matrícula:**  \n{num_mat_str}")
                     c_cols[4].markdown(f"**Cargo / Função:**  \n{cargo_str}")
                     c_cols[5].markdown(f"**CBO:**  \n{cbo_str}")
                     c_cols[6].markdown(f"**Setor:**  \n{setor_str}")
