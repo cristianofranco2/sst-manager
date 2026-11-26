@@ -77,7 +77,7 @@ def _inserir_treinamento_com_fallback(supabase, payload: dict):
         except Exception as e:
             msg = str(e)
             col_invalida = _extrair_coluna_pgrst204(msg)
-            if col_invalida and col_invalida in dados and col_invalida != "data_vencimento":
+            if col_invalida and col_invalida in dados and col_invalida not in ("tipo_treinamento", "data_vencimento"):
                 dados.pop(col_invalida)
                 continue
             raise
@@ -130,7 +130,7 @@ def render_treinamentos() -> None:
             for r in registros:
                 linhas.append({
                     "Treinamento": str(
-                        r.get("nome_treinamento") or r.get("titulo") or r.get("nome") or "—"
+                        r.get("nome_treinamento") or r.get("tipo_treinamento") or r.get("titulo") or r.get("nome") or "—"
                     ).strip().upper(),
                     "Modalidade": str(r.get("modalidade") or "—").strip().upper(),
                     "Capacitação": str(
@@ -152,7 +152,7 @@ def render_treinamentos() -> None:
             with c1:
                 nome_treinamento = st.text_input(
                     "Nome / Tipo do Treinamento *",
-                    placeholder="Ex: NR-11 OPERAÇÃO DE EMPILHADEIRA",
+                    placeholder="EX: NR-11 OPERAÇÃO DE EMPILHADEIRA",
                 )
             with c2:
                 modalidade = st.selectbox(
@@ -172,7 +172,7 @@ def render_treinamentos() -> None:
             with c4:
                 tipo_capacitacao = st.text_input(
                     "Tipo de Capacitação",
-                    placeholder="Ex: FORMAÇÃO / RECICLAGEM",
+                    placeholder="EX: FORMAÇÃO / RECICLAGEM",
                 )
             with c5:
                 carga_horaria = st.number_input(
@@ -190,20 +190,23 @@ def render_treinamentos() -> None:
 
             if st.form_submit_button("💾 Salvar Treinamento"):
                 nome_limpo = nome_treinamento.strip().upper()
+                cap_limpa = tipo_capacitacao.strip().upper()
                 if not nome_limpo:
                     st.warning("Informe o Nome / Tipo do Treinamento.")
                 else:
                     try:
                         hoje = date.today()
                         data_venc_calculada = _somar_meses(hoje, int(validade_meses))
+                        tipo_trein_valor = cap_limpa if cap_limpa else nome_limpo
                         payload = {
+                            "tipo_treinamento": tipo_trein_valor,
                             "nome_treinamento": nome_limpo,
                             "titulo": nome_limpo,
                             "nome": nome_limpo,
                             "modalidade": modalidade.strip().upper(),
                             "validade_meses": int(validade_meses),
-                            "tipo_capacitacao": tipo_capacitacao.strip().upper(),
-                            "capacitacao": tipo_capacitacao.strip().upper(),
+                            "tipo_capacitacao": cap_limpa,
+                            "capacitacao": cap_limpa,
                             "carga_horaria": int(carga_horaria),
                             "status": status_trein.strip().upper(),
                             "data_vencimento": str(data_venc_calculada),
