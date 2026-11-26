@@ -70,13 +70,12 @@ def _inserir_epi_com_fallback(supabase, payload: dict):
     remove a coluna indicada na mensagem de erro e tenta novamente.
     """
     dados = dict(payload)
-    for _ in range(8):
+    for _ in range(10):
         try:
             return supabase.table("epis").insert(dados).execute()
         except Exception as e:
             msg = str(e)
             if "PGRST204" in msg and "column of 'epis'" in msg:
-                # Extrai o nome da coluna entre aspas simples: 'nome_coluna'
                 partes = msg.split("'")
                 if len(partes) >= 2:
                     col_invalida = partes[1].strip()
@@ -116,7 +115,7 @@ def _inserir_entrada_inicial_inventario(
     }
 
     dados = dict(payload)
-    for _ in range(8):
+    for _ in range(10):
         try:
             supabase.table("inventario_epi").insert(dados).execute()
             return True, None
@@ -165,7 +164,7 @@ def render_epis() -> None:
                     descricao = str(e.get("descricao") or e.get("nome_epi") or "—").strip()
                     categoria = str(e.get("categoria") or "—").strip()
                     modelo = str(e.get("modelo") or "—").strip()
-                    ca = str(e.get("ca") or e.get("numero_ca") or e.get("codigo_ca") or "—").strip()
+                    ca = str(e.get("numero_ca") or e.get("ca") or e.get("codigo_ca") or "—").strip()
                     val_ca = _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca"))
                     durabilidade = e.get("durabilidade_dias")
                     durab_str = "—" if durabilidade in (None, "") else int(durabilidade)
@@ -227,8 +226,9 @@ def render_epis() -> None:
                             "descricao": descricao.strip(),
                             "categoria": categoria.strip(),
                             "modelo": modelo.strip(),
-                            "ca": ca.strip(),
+                            "numero_ca": ca.strip(),
                             "data_validade_ca": str(validade_ca),
+                            "durabilidade_dias": int(durabilidade_dias),
                             "estoque_minimo": int(estoque_minimo),
                         }
                         res_epi = _inserir_epi_com_fallback(supabase, novo_epi)
@@ -239,7 +239,7 @@ def render_epis() -> None:
                                 supabase.table("epis")
                                 .select("id")
                                 .eq("codigo_sku", codigo_sku.strip())
-                                .eq("ca", ca.strip())
+                                .eq("numero_ca", ca.strip())
                                 .order("id", desc=True)
                                 .limit(1)
                                 .execute()
