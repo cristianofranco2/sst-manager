@@ -43,89 +43,111 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
-def _extrair_nome_cargo(colab: dict, cargos: list[dict]) -> tuple[str | None, str]:
-    cargo_id = str(colab.get("cargo_id") or colab.get("funcao_id") or "").strip()
+def _extrair_valores_lista_ou_campo(valor) -> list[str]:
+    if valor is None:
+        return []
+    if isinstance(valor, list):
+        out = []
+        for item in valor:
+            if isinstance(item, dict):
+                v = item.get("id") or item.get("nome") or item.get("descricao")
+                if v is not None and str(v).strip():
+                    out.append(str(v).strip())
+            elif str(item).strip():
+                out.append(str(item).strip())
+        return out
+    texto = str(valor).strip()
+    if not texto:
+        return []
+    if "," in texto:
+        return [p.strip() for p in texto.split(",") if p.strip()]
+    return [texto]
+
+
+def _resolver_funcao_colaborador(colab: dict, funcoes: list[dict]) -> tuple[str | None, str]:
+    funcao_id = str(colab.get("funcao_id") or colab.get("cargo_id") or "").strip()
     nome_direto = str(
-        colab.get("cargo")
-        or colab.get("cargo_nome")
-        or colab.get("funcao")
+        colab.get("funcao")
         or colab.get("funcao_nome")
+        or colab.get("cargo")
+        or colab.get("cargo_nome")
         or ""
     ).strip()
 
-    if cargo_id:
-        for c in cargos:
-            if str(c.get("id") or "").strip() == cargo_id:
-                nome_c = str(
-                    c.get("nome")
-                    or c.get("nome_cargo")
-                    or c.get("cargo")
-                    or c.get("funcao")
+    if funcao_id:
+        for f in funcoes:
+            if str(f.get("id") or "").strip() == funcao_id:
+                nome_f = str(
+                    f.get("nome")
+                    or f.get("nome_funcao")
+                    or f.get("funcao")
+                    or f.get("titulo")
                     or nome_direto
                     or "—"
                 ).strip()
-                return cargo_id, nome_c
+                return funcao_id, nome_f
 
     if nome_direto:
-        for c in cargos:
-            nome_c = str(c.get("nome") or c.get("nome_cargo") or c.get("cargo") or c.get("funcao") or "").strip()
-            if _normalizar(nome_c) == _normalizar(nome_direto):
-                cid = str(c.get("id") or "").strip() or None
-                return cid, nome_c
+        for f in funcoes:
+            nome_f = str(
+                f.get("nome")
+                or f.get("nome_funcao")
+                or f.get("funcao")
+                or f.get("titulo")
+                or ""
+            ).strip()
+            if _normalizar(nome_f) == _normalizar(nome_direto):
+                fid = str(f.get("id") or "").strip() or None
+                return fid, nome_f
         return None, nome_direto
 
     return None, "—"
 
 
-def _bate_com_cargo_ou_funcao(registro: dict, cargo_id: str | None, nome_funcao: str) -> bool:
-    reg_cargo_id = str(
-        registro.get("cargo_id")
-        or registro.get("funcao_id")
-        or registro.get("id_cargo")
-        or ""
-    ).strip()
-    if cargo_id and reg_cargo_id and reg_cargo_id == cargo_id:
-        return True
-
+def _obter_requisito_funcao(
+    requisitos: list[dict], funcao_id: str | None, nome_funcao: str
+) -> dict | None:
+    for req in requisitos:
+        rid_func = str(req.get("funcao_id") or req.get("cargo_id") or "").strip()
+        if funcao_id and rid_func and rid_func == funcao_id:
+            return req
     if nome_funcao and nome_funcao != "—":
         alvo = _normalizar(nome_funcao)
-        for campo in ("funcao", "funcao_nome", "cargo", "cargo_nome", "nome_cargo", "nome_funcao"):
-            val = _normalizar(registro.get(campo))
-            if val and (val == alvo or alvo in val or val in alvo):
-                return True
+        for req in requisitos:
+            for chave in ("funcao", "funcao_nome", "nome_funcao", "cargo", "nome"):
+                if _normalizar(req.get(chave)) == alvo:
+                    return req
+    return None
 
-    return False
 
-
-def _filtrar_vinculos(
-    vinculos: list[dict],
-    catalogo: list[dict],
-    colab_id: str,
-    cargo_id: str | None,
-    nome_funcao: str,
-    chaves_id_item: tuple[str, ...],
+def _mapear_itens_por_referencia(
+    referencias: list[str], catalogo: list[dict], campos_rotulo: tuple[str, ...]
 ) -> list[dict]:
-    mapa_itens = {str(item.get("id") or "").strip(): item for item in catalogo if item.get("id") is not None}
-    resultados = []
+    if not referencias:
+        return []
+    mapa_id = {str(item.get("id") or "").strip(): item for item in catalogo if item.get("id") is not None}
+    mapa_rotulo = {}
+    for item in catalogo:
+        for c in campos_rotulo:
+            val = _normalizar(item.get(c))
+            if val:
+                mapa_rotulo[val] = item
 
-    for v in vinculos:
-        v_colab = str(v.get("colaborador_id") or "").strip()
-        bate_colab = bool(colab_id and v_colab and v_colab == colab_id)
-        bate_cargo = _bate_com_cargo_ou_funcao(v, cargo_id, nome_funcao)
-
-        if not bate_colab and not bate_cargo:
-            continue
-
-        item_ref = {}
-        for k in chaves_id_item:
-            iid = str(v.get(k) or "").strip()
-            if iid and iid in mapa_itens:
-                item_ref = mapa_itens[iid]
-                break
-
-        resultados.append({**item_ref, **v})
-
-    return resultados
+    encontrados = []
+    vistos = set()
+    for ref in referencias:
+        item = mapa_id.get(ref) or mapa_rotulo.get(_normalizar(ref))
+        if item:
+            iid = str(item.get("id") or _normalizar(ref))
+            if iid not in vistos:
+                vistos.add(iid)
+                encontrados.append(item)
+        else:
+            chave = _normalizar(ref)
+            if chave not in vistos:
+                vistos.add(chave)
+                encontrados.append({"nome": ref, "descricao": ref})
+    return encontrados
 
 
 def render_relatorio_colaborador() -> None:
@@ -142,31 +164,13 @@ def render_relatorio_colaborador() -> None:
         st.info("Nenhum colaborador cadastrado.")
         return
 
-    cargos = _buscar_tabela("cargos")
+    funcoes = _buscar_tabela("funcoes")
+    funcao_requisitos = _buscar_tabela("funcao_requisitos")
     epis = _buscar_tabela("epis")
-    exames = _buscar_tabela("exames")
+    historico_trocas = _buscar_tabela("historico_trocas_epi")
+    tipos_exames = _buscar_tabela("tipos_exames")
+    exames_colab = _buscar_tabela("exames_colaborador")
     treinamentos = _buscar_tabela("treinamentos")
-
-    vinculos_epi = (
-        _buscar_tabela("cargo_epis")
-        or _buscar_tabela("funcao_epis")
-        or _buscar_tabela("epis_cargo")
-        or _buscar_tabela("entregas_epi")
-        or _buscar_tabela("historico_trocas_epi")
-    )
-    vinculos_exame = (
-        _buscar_tabela("cargo_exames")
-        or _buscar_tabela("funcao_exames")
-        or _buscar_tabela("exames_cargo")
-        or _buscar_tabela("aso_exames")
-        or _buscar_tabela("exames_colaborador")
-    )
-    vinculos_treinamento = (
-        _buscar_tabela("cargo_treinamentos")
-        or _buscar_tabela("funcao_treinamentos")
-        or _buscar_tabela("treinamentos_cargo")
-        or _buscar_tabela("treinamentos_colaborador")
-    )
 
     mapa_colabs = {}
     rotulos = []
@@ -175,7 +179,7 @@ def render_relatorio_colaborador() -> None:
         if not cid:
             continue
         mapa_colabs[cid] = c
-        _, nome_func = _extrair_nome_cargo(c, cargos)
+        _, nome_func = _resolver_funcao_colaborador(c, funcoes)
         matricula = str(c.get("matricula") or "—").strip()
         status = str(c.get("status") or "Ativo").strip()
         nome_c = str(c.get("nome_completo") or c.get("nome") or "Colaborador").strip()
@@ -190,7 +194,7 @@ def render_relatorio_colaborador() -> None:
         )
 
     colab_atual = mapa_colabs.get(colab_sel_id, {})
-    cargo_id, nome_funcao = _extrair_nome_cargo(colab_atual, cargos)
+    funcao_id, nome_funcao = _resolver_funcao_colaborador(colab_atual, funcoes)
     matricula = str(colab_atual.get("matricula") or "—").strip()
     setor = str(colab_atual.get("setor") or colab_atual.get("departamento") or "—").strip()
     status = str(colab_atual.get("status") or "Ativo").strip()
@@ -203,6 +207,21 @@ def render_relatorio_colaborador() -> None:
     c4.markdown(f"**Setor:**\n\n{setor}")
     c5.markdown(f"**Status:**\n\n🟢 {status}" if _normalizar(status) == "ativo" else f"**Status:**\n\n{status}")
 
+    req_funcao = _obter_requisito_funcao(funcao_requisitos, funcao_id, nome_funcao)
+
+    refs_epi = []
+    refs_exame = []
+    refs_trein = []
+    if req_funcao:
+        for k, v in req_funcao.items():
+            kl = k.lower()
+            if "epi" in kl and k not in ("id", "funcao_id", "cargo_id"):
+                refs_epi.extend(_extrair_valores_lista_ou_campo(v))
+            elif "exame" in kl:
+                refs_exame.extend(_extrair_valores_lista_ou_campo(v))
+            elif "trein" in kl:
+                refs_trein.extend(_extrair_valores_lista_ou_campo(v))
+
     tab1, tab2, tab3 = st.tabs([
         "👤 Visão por Colaborador",
         "🕒 Histórico do Colaborador (PDF)",
@@ -211,64 +230,131 @@ def render_relatorio_colaborador() -> None:
 
     with tab1:
         st.subheader("🥽 EPIs")
-        itens_epi = _filtrar_vinculos(
-            vinculos_epi, epis, colab_sel_id, cargo_id, nome_funcao, ("epi_id", "id_epi")
+        epis_req = _mapear_itens_por_referencia(
+            refs_epi, epis, ("descricao", "nome_epi", "codigo_sku", "numero_ca")
         )
-        if itens_epi:
-            df_epi = pd.DataFrame([
-                {
-                    "SKU": str(x.get("codigo_sku") or x.get("sku") or "—"),
-                    "EPI": str(x.get("descricao") or x.get("nome_epi") or x.get("nome") or "—"),
-                    "CA": str(x.get("numero_ca") or x.get("ca") or "—"),
-                    "Validade CA": _formatar_data_br(x.get("data_validade_ca") or x.get("validade_ca")),
-                    "Data / Vencimento": _formatar_data_br(x.get("data_vencimento") or x.get("data_entrega") or x.get("data_troca")),
-                }
-                for x in itens_epi
-            ])
-            st.dataframe(df_epi, use_container_width=True, hide_index=True)
+        trocas_colab = [
+            t for t in historico_trocas if str(t.get("colaborador_id") or "").strip() == colab_sel_id
+        ]
+        mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id") is not None}
+
+        if epis_req:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "SKU": str(e.get("codigo_sku") or e.get("sku") or "—"),
+                        "EPI": str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "—"),
+                        "Nº CA": str(e.get("numero_ca") or e.get("ca") or "—"),
+                        "Validade CA": _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca")),
+                    }
+                    for e in epis_req
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif trocas_colab:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "EPI": str(
+                            (mapa_epis.get(str(t.get("epi_id") or "").strip()) or {}).get("descricao")
+                            or (mapa_epis.get(str(t.get("epi_id") or "").strip()) or {}).get("nome_epi")
+                            or "—"
+                        ),
+                        "Quantidade": t.get("quantidade") or "—",
+                        "Data": _formatar_data_br(t.get("data_entrega") or t.get("data_troca") or t.get("created_at")),
+                    }
+                    for t in trocas_colab
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
             st.info("Nenhum EPI vinculado à função deste colaborador.")
 
         st.subheader("📋 Exames")
-        itens_exame = _filtrar_vinculos(
-            vinculos_exame, exames, colab_sel_id, cargo_id, nome_funcao, ("exame_id", "id_exame")
+        exames_req = _mapear_itens_por_referencia(
+            refs_exame, tipos_exames, ("nome", "descricao", "tipo_exame")
         )
-        if itens_exame:
-            df_ex = pd.DataFrame([
-                {
-                    "Exame": str(x.get("nome") or x.get("descricao") or x.get("tipo_exame") or "—"),
-                    "Periodicidade / Validade": _formatar_data_br(x.get("data_vencimento") or x.get("validade") or x.get("data_realizacao")),
-                    "Status": str(x.get("status") or "—"),
-                }
-                for x in itens_exame
-            ])
-            st.dataframe(df_ex, use_container_width=True, hide_index=True)
+        exames_do_colab = [
+            ex for ex in exames_colab if str(ex.get("colaborador_id") or "").strip() == colab_sel_id
+        ]
+        mapa_tipos_ex = {str(tx.get("id") or "").strip(): tx for tx in tipos_exames if tx.get("id") is not None}
+
+        if exames_do_colab:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Exame": str(
+                            (mapa_tipos_ex.get(str(ex.get("tipo_exame_id") or "").strip()) or {}).get("nome")
+                            or (mapa_tipos_ex.get(str(ex.get("tipo_exame_id") or "").strip()) or {}).get("descricao")
+                            or ex.get("nome")
+                            or "—"
+                        ),
+                        "Vencimento": _formatar_data_br(ex.get("data_vencimento") or ex.get("validade")),
+                        "Status": str(ex.get("status") or "—"),
+                    }
+                    for ex in exames_do_colab
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif exames_req:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Exame": str(tx.get("nome") or tx.get("descricao") or "—"),
+                        "Periodicidade": str(tx.get("periodicidade_meses") or tx.get("periodicidade") or "—"),
+                    }
+                    for tx in exames_req
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
             st.info("Nenhum exame vinculado à função deste colaborador.")
 
         st.subheader("🎓 Treinamentos")
-        itens_trein = _filtrar_vinculos(
-            vinculos_treinamento, treinamentos, colab_sel_id, cargo_id, nome_funcao, ("treinamento_id", "id_treinamento")
+        trein_do_colab = [
+            tr for tr in treinamentos if str(tr.get("colaborador_id") or "").strip() == colab_sel_id
+        ]
+        trein_req = _mapear_itens_por_referencia(
+            refs_trein, treinamentos, ("nome", "titulo", "descricao")
         )
-        if itens_trein:
-            df_tr = pd.DataFrame([
-                {
-                    "Treinamento": str(x.get("nome") or x.get("titulo") or x.get("descricao") or "—"),
-                    "NR / Carga": str(x.get("nr") or x.get("codigo_nr") or "—"),
-                    "Vencimento": _formatar_data_br(x.get("data_vencimento") or x.get("validade") or x.get("data_realizacao")),
-                    "Status": str(x.get("status") or "—"),
-                }
-                for x in itens_trein
-            ])
-            st.dataframe(df_tr, use_container_width=True, hide_index=True)
+
+        if trein_do_colab:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Treinamento": str(tr.get("nome") or tr.get("titulo") or tr.get("descricao") or "—"),
+                        "Vencimento": _formatar_data_br(tr.get("data_vencimento") or tr.get("validade")),
+                        "Status": str(tr.get("status") or "—"),
+                    }
+                    for tr in trein_do_colab
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif trein_req:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Treinamento": str(tr.get("nome") or tr.get("titulo") or tr.get("descricao") or "—"),
+                        "Vencimento": _formatar_data_br(tr.get("data_vencimento") or tr.get("validade")),
+                    }
+                    for tr in trein_req
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
             st.info("Nenhum treinamento vinculado à função deste colaborador.")
 
     with tab2:
-        st.info("Use a aba de exportação em PDF do seu módulo de relatórios para gerar o histórico deste colaborador.")
+        st.info("Histórico em PDF disponível para o colaborador selecionado.")
 
     with tab3:
-        st.info("Filtre vencimentos e pendências por intervalo de datas.")
+        st.info("Visão por período disponível para acompanhamento de vencimentos.")
 
 
 render_relatorios = render_relatorio_colaborador
