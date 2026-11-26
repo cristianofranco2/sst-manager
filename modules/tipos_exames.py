@@ -39,7 +39,6 @@ def _executar_insert_maiusculo(supabase, tabela: str, payload: dict, obrigatoria
 
 
 def _converter_exames_existentes_maiusculo(supabase) -> tuple[int, int]:
-    """Opcional: converte para MAIÚSCULO registros já existentes em tipos_exames."""
     atualizados = 0
     erros = 0
     res = supabase.table("tipos_exames").select("*").execute()
@@ -77,7 +76,10 @@ def render_cadastro_exames() -> None:
 
         if st.button("🔠 Padronizar cadastrados em MAIÚSCULO", key="btn_up_exames_existentes"):
             ok_q, err_q = _converter_exames_existentes_maiusculo(supabase)
-            st.success(f"Exames atualizados para MAIÚSCULO: {ok_q}" + (f" (erros: {err_q})" if err_q else ""))
+            st.success(
+                f"Exames atualizados para MAIÚSCULO: {ok_q}"
+                + (f" (erros: {err_q})" if err_q else "")
+            )
             st.rerun()
 
         res = supabase.table("tipos_exames").select("*").execute()
@@ -100,7 +102,6 @@ def render_cadastro_exames() -> None:
                     st.error("Informe o nome do exame.")
                     return
 
-                # Tudo convertido para MAIÚSCULO antes de inserir no banco
                 payload = _para_maiusculo({
                     "nome": nome_exame,
                     "nome_exame": nome_exame,
@@ -110,8 +111,16 @@ def render_cadastro_exames() -> None:
                     "observacoes": observacoes,
                 })
                 try:
-                    _executar_insert_maiusculo(supabase, "tipos_exames", payload, obrigatorias={"nome"})
+                    _executar_insert_maiusculo(
+                        supabase,
+                        "tipos_exames",
+                        payload,
+                        obrigatorias={"nome"},
+                    )
                     st.success(f"Exame '{payload['nome']}' cadastrado em MAIÚSCULO!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao salvar exame: {e}")
+
+
+render_exames = render_cadastro_exames
