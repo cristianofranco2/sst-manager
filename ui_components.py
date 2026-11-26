@@ -8,8 +8,12 @@ import streamlit as st
 
 def _carregar_fonte(tamanho: int, negrito: bool = False):
     candidatas_fontes = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if negrito else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if negrito else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if negrito
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+        if negrito
+        else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "DejaVuSans-Bold.ttf" if negrito else "DejaVuSans.ttf",
     ]
     for caminho_fonte in candidatas_fontes:
@@ -35,7 +39,7 @@ def _vertices_hexagono(cx: float, cy: float, raio: float) -> list[tuple[float, f
 
 def _gerar_logo_padrao_bytes() -> bytes:
     """
-    Gera um PNG fiel à identidade visual GLOBEX MULTIMODAL caso o arquivo
+    Gera um PNG fiel à identidade visual GLOBEX MULTIMODAL caso o ficheiro
     de imagem não esteja presente no ambiente de execução.
     """
     largura, altura = 1200, 420
@@ -54,14 +58,12 @@ def _gerar_logo_padrao_bytes() -> bytes:
     draw.text((x_texto, y_globex), "GLOBEX", fill=cor_texto, font=fonte_globex)
 
     bbox_globex = draw.textbbox((x_texto, y_globex), "GLOBEX", font=fonte_globex)
-    # Posiciona "MULTIMODAL" alinhado à direita, abaixo da porção final de "GLOBEX"
     bbox_sub = draw.textbbox((0, 0), "MULTIMODAL", font=fonte_sub)
     larg_sub = bbox_sub[2] - bbox_sub[0]
     x_sub = bbox_globex[2] - larg_sub - 6
     y_sub = bbox_globex[3] + 18
     draw.text((x_sub, y_sub), "MULTIMODAL", fill=cor_texto, font=fonte_sub)
 
-    # Emblema geométrico à direita
     cx_hex = 915.0
     cy_hex = 210.0
     raio_ext = 118.0
@@ -70,21 +72,21 @@ def _gerar_logo_padrao_bytes() -> bytes:
     hex_ext = _vertices_hexagono(cx_hex, cy_hex, raio_ext)
     hex_int = _vertices_hexagono(cx_hex, cy_hex, raio_int)
 
-    # Anel azul vazado (polígono externo menos interno)
-    anel_azul = PILImage.new("RGBA", (largura, altura), (0, 0, 0, 0))
-    draw_azul = ImageDraw.Draw(anel_azul, "RGBA")
-    draw_azul.polygon(hex_ext, fill=cor_azul)
-    draw_azul.polygon(hex_int, fill=(0, 0, 0, 0))
-    # Usa máscara para recortar o miolo com transparência real
     mascara = PILImage.new("L", (largura, altura), 0)
     draw_mask = ImageDraw.Draw(mascara)
     draw_mask.polygon(hex_ext, fill=255)
     draw_mask.polygon(hex_int, fill=0)
 
     camada_azul = PILImage.new("RGBA", (largura, altura), cor_azul)
-    img = PILImage.alpha_composite(img, PILImage.composite(camada_azul, PILImage.new("RGBA", (largura, altura), (0, 0, 0, 0)), mascara))
+    img = PILImage.alpha_composite(
+        img,
+        PILImage.composite(
+            camada_azul,
+            PILImage.new("RGBA", (largura, altura), (0, 0, 0, 0)),
+            mascara,
+        ),
+    )
 
-    # Faixa vermelha deslocada à direita/cima (lados superior-direito e inferior-direito)
     dx = 54.0
     dy = -26.0
     esp = 28.0
@@ -92,7 +94,6 @@ def _gerar_logo_padrao_bytes() -> bytes:
     p_right = (hex_ext[0][0] + dx, hex_ext[0][1] + dy)
     p_bot_r = (hex_ext[1][0] + dx, hex_ext[1][1] + dy)
 
-    # Constrói faixa grossa acompanhando os dois segmentos direitos
     faixa_vermelha = [
         (p_top_r[0] - esp * 0.4, p_top_r[1] - esp * 0.7),
         (p_right[0] + esp * 0.85, p_right[1] - esp * 0.3),
@@ -104,16 +105,17 @@ def _gerar_logo_padrao_bytes() -> bytes:
     draw = ImageDraw.Draw(img, "RGBA")
     draw.polygon(faixa_vermelha, fill=cor_vermelho)
 
-    # Recorta margem transparente excedente
     bbox = img.getbbox()
     if bbox:
         pad = 24
-        img = img.crop((
-            max(0, bbox[0] - pad),
-            max(0, bbox[1] - pad),
-            min(largura, bbox[2] + pad),
-            min(altura, bbox[3] + pad),
-        ))
+        img = img.crop(
+            (
+                max(0, bbox[0] - pad),
+                max(0, bbox[1] - pad),
+                min(largura, bbox[2] + pad),
+                min(altura, bbox[3] + pad),
+            )
+        )
 
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -122,7 +124,7 @@ def _gerar_logo_padrao_bytes() -> bytes:
 
 def obter_logo_bytes() -> bytes:
     """
-    Busca o arquivo de logotipo oficial no repositório antes de recorrer ao desenho padrão.
+    Busca o ficheiro de logótipo oficial no repositório antes de recorrer ao desenho padrão.
     """
     base_dir = Path(__file__).resolve().parent
     candidatos = [
@@ -150,7 +152,6 @@ def obter_logo_bytes() -> bytes:
 
 
 def render_logo_sidebar() -> None:
-    st.sidebar.image(obter_logo_bytes(), use_container_width=True)
     st.sidebar.caption("Gestor SST • Indaiatuba - SP")
     st.sidebar.markdown("---")
 
@@ -172,7 +173,7 @@ def gerar_pdf_historico_colaborador(
     """
     Gera um PDF de auditoria/fiscalização com as datas em que as trocas de EPI
     foram realizadas e as datas em que exames e treinamentos foram renovados,
-    incluindo o logotipo da empresa e datas no formato dd/mm/aaaa.
+    incluindo o logótipo da empresa e datas no formato dd/mm/aaaa.
     """
     try:
         from reportlab.lib import colors
@@ -188,7 +189,10 @@ def gerar_pdf_historico_colaborador(
             TableStyle,
         )
     except ImportError:
-        return None, "Biblioteca 'reportlab' não instalada. Adicione 'reportlab' ao requirements.txt e faça reboot na app."
+        return (
+            None,
+            "Biblioteca 'reportlab' não instalada. Adicione 'reportlab' ao requirements.txt e faça reboot na app.",
+        )
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -274,7 +278,9 @@ def gerar_pdf_historico_colaborador(
 
     elementos.append(Paragraph("Registro de Trocas Realizadas e Renovações Efetuadas", estilo_secao))
     if not movimentacoes_realizadas:
-        elementos.append(Paragraph("Nenhuma troca de EPI ou renovação registrada para este colaborador.", estilo_sub))
+        elementos.append(
+            Paragraph("Nenhuma troca de EPI ou renovação registrada para este colaborador.", estilo_sub)
+        )
     else:
         cabecalhos = ["Data Realização", "Tipo de Registro", "Item", "Detalhes / Observações"]
         linhas = [
