@@ -5,11 +5,14 @@ import streamlit as st
 from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
+DATA_MIN_CALENDARIO = date(1900, 1, 1)
+DATA_MAX_CALENDARIO = date(2100, 12, 31)
+
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _buscar_epis() -> list[dict]:
     supabase = get_supabase()
-    res = supabase.table("epis").select("*").order("descricao").execute()
+    res = supabase.table("epis").select("*").execute()
     return res.data or []
 
 
@@ -20,13 +23,14 @@ def _buscar_inventario() -> list[dict]:
         res = supabase.table("inventario_epi").select("*").order("data_entrada", desc=True).execute()
         return res.data or []
     except Exception:
-        return []
+        res = supabase.table("inventario_epi").select("*").execute()
+        return res.data or []
 
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _buscar_colaboradores() -> list[dict]:
     supabase = get_supabase()
-    res = supabase.table("colaboradores").select("id, nome_completo, matricula, cargo").order("nome_completo").execute()
+    res = supabase.table("colaboradores").select("*").order("nome_completo").execute()
     return res.data or []
 
 
@@ -47,39 +51,27 @@ def _limpar_cache_inventario() -> None:
     _buscar_historico_trocas.clear()
 
 
-def _formatar_data_br(valor) -> str:
+def _parse_data(valor) -> date | None:
     if not valor:
-        return "—"
+        return None
+    if isinstance(valor, date) and not isinstance(valor, datetime):
+        return valor
     if isinstance(valor, datetime):
-        return valor.strftime("%d/%m/%Y")
-    if isinstance(valor, date):
-        return valor.strftime("%d/%m/%Y")
+        return valor.date()
     texto = str(valor).strip()[:10]
     if not texto:
-        return "—"
+        return None
     for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
         try:
-            return datetime.strptime(texto, fmt).strftime("%d/%m/%Y")
+            return datetime.strptime(texto, fmt).date()
         except ValueError:
             continue
-    return texto
+    return None
 
 
-def _label_epi_detalhado(epi: dict) -> str:
-    nome = str(epi.get("descricao") or epi.get("nome_epi") or "EPI").strip()
-    sku = str(epi.get("codigo_sku") or "").strip()
-    ca = str(epi.get("numero_ca") or epi.get("ca") or "").strip()
-    val_ca = _formatar_data_br(epi.get("data_validade_ca") or epi.get("validade_ca"))
-
-    partes = []
-    if sku:
-        partes.append(f"SKU {sku}")
-    if ca:
-        partes.append(f"CA {ca}")
-    if val_ca != "—":
-        partes.append(f"Val. CA {val_ca}")
-
-    return f"{nome} — {' | '.join(partes)}" if partes else nome
+def _formatar_data_br(valor) -> str:
+    dt = _parse_data(valor)
+    return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
 def render_inventario() -> None:
@@ -92,15 +84,12 @@ def render_inventario() -> None:
         return
 
     epis = _buscar_epis()
-    mapa_epis_obj = {str(e["id"]): e for e in epis if e.get("id")}
-    mapa_epis = {eid: _label_epi_detalhado(e) for eid, e in mapa_epis_obj.items()}
+    inventario = _buscar_inventario()
+    colaboradores = _buscar_colaboradores()
+    historico_trocas = _buscar_historico_trocas()
 
-    colabs = _buscar_colaboradores()
-    mapa_colabs = {
-        str(c["id"]): f"{c.get('nome_completo') or 'Sem nome'} ({c.get('matricula') or '—'})"
-        for c in colabs
-        if c.get("id")
-    }
+    mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id")}
+    mapa_colabs = {str(c.get("id") or "").strip(): c for c in colaboradores if c.get("id")}
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "📦 Estoque / Lotes no Inventário",
@@ -112,216 +101,93 @@ def render_inventario() -> None:
     with tab1:
         col_t, col_b = st.columns([4, 1])
         with col_t:
-            st.subheader("Lotes / Quantidades Disponíveis")
+            st.subheader("Lotes Registrados no Inventário")
         with col_b:
-            if st.button("🔄 Atualizar", key="btn_atualizar_inv", use_container_width=True):
+            if st.button("🔄 Atualizar", key="btn_att_inv_tab1", use_container_width=True):
                 _limpar_cache_inventario()
                 st.rerun()
 
-        inv = _buscar_inventario()
-        if inv:
-            df = pd.DataFrame(inv)
-            if "epi_id" in df.columns:
-                df["epi_nome"] = df["epi_id"].map(lambda eid: mapa_epis.get(str(eid), str(eid)))
-            for col_d in ["data_entrada", "data_validade_lote"]:
-                if col_d in df.columns:
-                    df[col_d] = df[col_d].map(_formatar_data_br)
-
-            colunas = [
-                "epi_nome",
-                "codigo_lote",
-                "quantidade_disponivel",
-                "data_entrada",
-                "data_validade_lote",
-                "observacoes",
-            ]
-            existentes = [c for c in colunas if c in df.columns]
-            df_exibir = df[existentes].rename(
-                columns={
-                    "epi_nome": "EPI (SKU / CA / Validade CA)",
-                    "codigo_lote": "Lote",
-                    "quantidade_disponivel": "Qtd. Disponível",
-                    "data_entrada": "Data Entrada",
-                    "data_validade_lote": "Validade Lote",
-                    "observacoes": "Observações",
-                }
-            )
-            st.dataframe(df_exibir, use_container_width=True, hide_index=True)
+        if inventario:
+            linhas_lotes = []
+            for item in inventario:
+                eid = str(item.get("epi_id") or "").strip()
+                epi_ref = mapa_epis.get(eid, {})
+                sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or "—").strip()
+                nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
+                ca = str(
+                    item.get("ca")
+                    or item.get("numero_ca")
+                    or epi_ref.get("ca")
+                    or epi_ref.get("numero_ca")
+                    or "—"
+                ).strip()
+                validade = _formatar_data_br(
+                    item.get("data_validade")
+                    or item.get("data_validade_lote")
+                    or epi_ref.get("data_validade_ca")
+                    or epi_ref.get("validade_ca")
+                )
+                linhas_lotes.append({
+                    "Lote": str(item.get("codigo_lote") or "—"),
+                    "SKU": sku,
+                    "EPI": nome_epi,
+                    "CA": ca,
+                    "Validade": validade,
+                    "Entrada": _formatar_data_br(item.get("data_entrada")),
+                    "Saldo Disponível": int(item.get("quantidade_disponivel") or 0),
+                    "Observações": str(item.get("observacoes") or "—"),
+                })
+            st.dataframe(pd.DataFrame(linhas_lotes), use_container_width=True, hide_index=True)
         else:
-            st.info("Nenhum lote registrado no inventário ainda.")
+            st.info("Nenhum lote registrado no inventário.")
 
     with tab2:
         st.subheader("Registrar Entrada de EPI no Inventário")
-        ids_epis = list(mapa_epis.keys())
-        if not ids_epis:
-            st.warning("Cadastre um EPI no **Cadastro de EPIs** antes de lançar no inventário.")
+
+        if not epis:
+            st.warning("Nenhum EPI cadastrado. Cadastre um EPI antes de registrar entrada no inventário.")
         else:
+            ids_epis = list(mapa_epis.keys())
+
+            def _formatar_epi(eid: str) -> str:
+                e = mapa_epis.get(eid, {})
+                sku = str(e.get("codigo_sku") or e.get("sku") or eid).strip()
+                nome = str(e.get("descricao") or e.get("nome_epi") or "EPI").strip()
+                ca = str(e.get("ca") or e.get("numero_ca") or "—").strip()
+                val = _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca"))
+                return f"{sku} — {nome} | CA {ca} | Val. {val}"
+
+            epi_sel_id = st.selectbox(
+                "EPI (identificado por SKU, CA e Validade CA) *",
+                options=ids_epis,
+                format_func=_formatar_epi,
+                key="select_epi_entrada_inv",
+            )
+
             with st.form("form_entrada_inventario", clear_on_submit=True):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    epi_selecionado = st.selectbox(
-                        "EPI (identificado por SKU, CA e Validade CA) *",
-                        options=ids_epis,
-                        format_func=lambda eid: mapa_epis[eid],
-                    )
+                    quantidade = st.number_input("Quantidade *", min_value=1, value=10, step=1)
                     codigo_lote = st.text_input("Código do Lote", placeholder="Ex: LOTE-2026-11")
                 with c2:
-                    qtd_entrada = st.number_input("Quantidade *", min_value=1, value=10, step=1)
-                    data_entrada = st.date_input("Data de Entrada *", value=date.today(), format="DD/MM/YYYY")
+                    data_entrada = st.date_input(
+                        "Data de Entrada *",
+                        value=date.today(),
+                        min_value=DATA_MIN_CALENDARIO,
+                        max_value=DATA_MAX_CALENDARIO,
+                        format="DD/MM/YYYY",
+                    )
                 with c3:
-                    tem_validade = st.checkbox("Informar validade específica do lote", value=False)
-                    data_validade_lote = st.date_input("Validade do Lote", format="DD/MM/YYYY")
+                    informar_val_lote = st.checkbox("Informar validade específica do lote", value=False)
+                    data_validade_lote = st.date_input(
+                        "Validade do Lote",
+                        value=date.today(),
+                        min_value=DATA_MIN_CALENDARIO,
+                        max_value=DATA_MAX_CALENDARIO,
+                        format="DD/MM/YYYY",
+                    )
 
                 observacoes = st.text_area("Observações")
                 submitted = st.form_submit_button("💾 Registrar Entrada")
 
                 if submitted:
-                    try:
-                        payload = {
-                            "epi_id": epi_selecionado,
-                            "codigo_lote": codigo_lote.strip(),
-                            "quantidade_disponivel": int(qtd_entrada),
-                            "data_entrada": str(data_entrada),
-                            "data_validade_lote": str(data_validade_lote) if tem_validade else None,
-                            "observacoes": observacoes.strip(),
-                        }
-                        supabase.table("inventario_epi").insert(payload).execute()
-                        _limpar_cache_inventario()
-                        st.success("Entrada adicionada ao inventário com sucesso!")
-                    except Exception as e:
-                        st.error(f"Erro ao salvar no inventário: {e}")
-
-    with tab3:
-        st.subheader("Ajuste Manual de Saldo no Inventário")
-        inv_ajuste = _buscar_inventario()
-        if not inv_ajuste:
-            st.info("Nenhum item no inventário para ajustar saldo.")
-        else:
-            opcoes_lotes = [str(item["id"]) for item in inv_ajuste if item.get("id")]
-            mapa_lotes_aj = {}
-            for item in inv_ajuste:
-                lid = str(item.get("id") or "")
-                if not lid:
-                    continue
-                epi_txt = mapa_epis.get(str(item.get("epi_id") or ""), str(item.get("epi_id") or "EPI"))
-                lote_txt = str(item.get("codigo_lote") or "Sem lote").strip()
-                saldo_txt = int(item.get("quantidade_disponivel") or 0)
-                dt_ent = _formatar_data_br(item.get("data_entrada"))
-                mapa_lotes_aj[lid] = f"{epi_txt} | Lote: {lote_txt} | Entrada: {dt_ent} | Saldo atual: {saldo_txt}"
-
-            lote_escolhido_id = st.selectbox(
-                "Selecione o Lote / Item do Inventário *",
-                options=opcoes_lotes,
-                format_func=lambda lid: mapa_lotes_aj[lid],
-                key="sel_lote_ajuste_saldo",
-            )
-            item_atual = next((x for x in inv_ajuste if str(x.get("id")) == lote_escolhido_id), {})
-            saldo_atual = int(item_atual.get("quantidade_disponivel") or 0)
-
-            tipo_ajuste = st.radio(
-                "Tipo de Ajuste",
-                ["Definir saldo exato", "Somar / Subtrair quantidade"],
-                horizontal=True,
-                key="tipo_ajuste_saldo",
-            )
-
-            if tipo_ajuste == "Definir saldo exato":
-                novo_saldo = st.number_input(
-                    "Novo Saldo *",
-                    min_value=0,
-                    max_value=999999,
-                    value=saldo_atual,
-                    step=1,
-                    key="novo_saldo_exato",
-                )
-            else:
-                delta_qtd = st.number_input(
-                    "Variação (use positivo para entrada ou negativo para baixa)",
-                    min_value=-saldo_atual,
-                    max_value=999999,
-                    value=0,
-                    step=1,
-                    key="delta_saldo_qtd",
-                )
-                novo_saldo = max(0, saldo_atual + int(delta_qtd))
-                st.caption(f"Saldo resultante: **{novo_saldo}** (atual: {saldo_atual})")
-
-            motivo_ajuste = st.text_input(
-                "Motivo do Ajuste *",
-                placeholder="Ex: Inventário físico, avaria, correção de lançamento",
-                key="motivo_ajuste_saldo",
-            )
-
-            if st.button("💾 Confirmar Ajuste de Saldo", type="primary", key="btn_confirmar_ajuste_saldo"):
-                if not motivo_ajuste.strip():
-                    st.warning("Informe o motivo do ajuste (*).")
-                else:
-                    try:
-                        obs_antiga = str(item_atual.get("observacoes") or "").strip()
-                        registro_obs = (
-                            f"[{date.today().strftime('%d/%m/%Y')}] Ajuste de saldo: "
-                            f"{saldo_atual} -> {novo_saldo} ({motivo_ajuste.strip()})"
-                        )
-                        obs_final = f"{obs_antiga} | {registro_obs}" if obs_antiga else registro_obs
-
-                        supabase.table("inventario_epi").update({
-                            "quantidade_disponivel": int(novo_saldo),
-                            "observacoes": obs_final,
-                        }).eq("id", lote_escolhido_id).execute()
-
-                        _limpar_cache_inventario()
-                        st.success(f"Saldo atualizado de {saldo_atual} para {novo_saldo}!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao ajustar saldo: {e}")
-
-    with tab4:
-        st.subheader("Histórico de Trocas e Entregas por Colaborador")
-        filtro_colab = st.selectbox(
-            "Filtrar por Colaborador",
-            options=["TODOS"] + list(mapa_colabs.keys()),
-            format_func=lambda cid: "Todos os Colaboradores" if cid == "TODOS" else mapa_colabs[cid],
-            key="filtro_hist_trocas_colab",
-        )
-
-        hist = _buscar_historico_trocas()
-        if filtro_colab != "TODOS":
-            hist = [h for h in hist if str(h.get("colaborador_id")) == filtro_colab]
-
-        if hist:
-            df_h = pd.DataFrame(hist)
-            if "colaborador_id" in df_h.columns:
-                df_h["colaborador_nome"] = df_h["colaborador_id"].map(
-                    lambda cid: mapa_colabs.get(str(cid), str(cid))
-                )
-            if "epi_id" in df_h.columns:
-                df_h["epi_nome"] = df_h["epi_id"].map(lambda eid: mapa_epis.get(str(eid), str(eid)))
-
-            for col_d in ["data_troca", "data_vencimento_novo"]:
-                if col_d in df_h.columns:
-                    df_h[col_d] = df_h[col_d].map(_formatar_data_br)
-
-            colunas_h = [
-                "data_troca",
-                "colaborador_nome",
-                "epi_nome",
-                "tipo_movimentacao",
-                "quantidade",
-                "data_vencimento_novo",
-                "motivo",
-            ]
-            existentes_h = [c for c in colunas_h if c in df_h.columns]
-            df_h_exibir = df_h[existentes_h].rename(
-                columns={
-                    "data_troca": "Data Troca",
-                    "colaborador_nome": "Colaborador",
-                    "epi_nome": "EPI",
-                    "tipo_movimentacao": "Tipo",
-                    "quantidade": "Qtd.",
-                    "data_vencimento_novo": "Novo Vencimento",
-                    "motivo": "Motivo",
-                }
-            )
-            st.dataframe(df_h_exibir, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhuma troca registrada para o filtro selecionado.")
