@@ -679,6 +679,7 @@ def _conteudo_dialog_troca_epi(
     nome_epi_str = str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "EPI").strip().upper()
     sku_str = str(e.get("codigo_sku") or e.get("sku") or "—").strip().upper()
     eid_alvo = str(e.get("id") or "").strip()
+    hoje_dt = date.today()
 
     saldo_disp_epi = sum(
         max(0, _obter_qtd_lote(inv))
@@ -691,7 +692,11 @@ def _conteudo_dialog_troca_epi(
         "Quantidade", min_value=1, value=max(1, int(qtd_req or 1)), step=1, key=f"q_troca_{colab_sel_id}_{eid_alvo}"
     )
     data_troca = st.date_input(
-        "Data da Entrega / Troca", value=date.today(), format="DD/MM/YYYY", key=f"d_troca_{colab_sel_id}_{eid_alvo}"
+        "Data da Entrega / Troca",
+        value=hoje_dt,
+        max_value=hoje_dt,
+        format="DD/MM/YYYY",
+        key=f"d_troca_{colab_sel_id}_{eid_alvo}",
     )
     motivo_troca = st.text_input(
         "Motivo / Obs.", placeholder="EX: TROCA PERIÓDICA", key=f"m_troca_{colab_sel_id}_{eid_alvo}"
@@ -703,6 +708,9 @@ def _conteudo_dialog_troca_epi(
 
     b1, b2 = st.columns(2)
     if b1.button("✅ Confirmar Troca", key=f"ok_troca_{colab_sel_id}_{eid_alvo}", use_container_width=True):
+        if data_troca > date.today():
+            st.error("NÃO É PERMITIDO INFORMAR DATA FUTURA PARA ENTREGA / TROCA.")
+            return
         try:
             ok_inv, msg_inv, lote_id = _consumir_inventario_epi(supabase, inventario, e.get("id"), int(qtd_troca))
             if not ok_inv:
@@ -753,10 +761,15 @@ def _conteudo_dialog_renovar(
     fechar_cb,
 ) -> None:
     chave_base = f"{tabela_destino}_{colab_sel_id}_{re.sub(r'[^a-zA-Z0-9]', '_', nome_item)}"
+    hoje_dt = date.today()
     st.caption(f"{tipo_label}: **{nome_item}**")
 
     data_real = st.date_input(
-        "Data de Realização / Conclusão", value=date.today(), format="DD/MM/YYYY", key=f"d_ren_{chave_base}"
+        "Data de Realização / Conclusão",
+        value=hoje_dt,
+        max_value=hoje_dt,
+        format="DD/MM/YYYY",
+        key=f"d_ren_{chave_base}",
     )
     meses_val = st.number_input(
         "Validade / Período (MESES)", min_value=1, value=per_padrao, step=1, key=f"m_ren_{chave_base}"
@@ -766,6 +779,9 @@ def _conteudo_dialog_renovar(
 
     b1, b2 = st.columns(2)
     if b1.button("✅ Confirmar Renovação", key=f"ok_ren_{chave_base}", use_container_width=True):
+        if data_real > date.today():
+            st.error("NÃO É PERMITIDO INFORMAR DATA FUTURA PARA REALIZAÇÃO / CONCLUSÃO.")
+            return
         try:
             if tabela_destino == "exames_colaborador":
                 payload = {
