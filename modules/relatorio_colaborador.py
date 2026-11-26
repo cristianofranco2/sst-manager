@@ -1,4 +1,6 @@
 from datetime import date, datetime
+import ast
+import json
 import pandas as pd
 import streamlit as st
 
@@ -43,25 +45,95 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
-def _extrair_valores_lista_ou_campo(valor) -> list[str]:
-    if valor is None:
-        return []
-    if isinstance(valor, list):
-        out = []
-        for item in valor:
+def _converter_para_estrutura(valor):
+    if isinstance(valor, (dict, list)):
+        return valor
+    if isinstance(valor, str):
+        texto = valor.strip()
+        if not texto:
+            return None
+        if texto.startswith("{") or texto.startswith("["):
+            for parser in (json.loads, ast.literal_eval):
+                try:
+                    return parser(texto)
+                except Exception:
+                    continue
+    return valor
+
+
+def _extrair_mapa_referencias_e_qtds(valor) -> dict[str, int | None]:
+    """
+    Extrai {referencia_ou_id: quantidade_opcional} a partir de:
+    - dict/JSON: {"uuid_epi": 1, ...}
+    - list/JSON: ["uuid_epi", ...] ou [{"id": "uuid_epi", "quantidade": 1}, ...]
+    - str separada por vírgula: "id1,id2"
+    """
+    estrutura = _converter_para_estrutura(valor)
+    resultado: dict[str, int | None] = {}
+
+    if estrutura is None:
+        return resultado
+
+    if isinstance(estrutura, dict):
+        for k, v in estrutura.items():
+            chave = str(k or "").strip()
+            if not chave:
+                continue
+            qtd = None
+            if isinstance(v, (int, float)):
+                qtd = int(v)
+            elif isinstance(v, dict):
+                q_raw = v.get("quantidade") or v.get("qtd")
+                if q_raw is not None:
+                    try:
+                        qtd = int(q_raw)
+                    except Exception:
+                        qtd = None
+            resultado[chave] = qtd
+        return resultado
+
+    if isinstance(estrutura, list):
+        for item in estrutura:
             if isinstance(item, dict):
-                v = item.get("id") or item.get("nome") or item.get("descricao")
-                if v is not None and str(v).strip():
-                    out.append(str(v).strip())
-            elif str(item).strip():
-                out.append(str(item).strip())
-        return out
-    texto = str(valor).strip()
+                ref = str(
+                    item.get("id")
+                    or item.get("epi_id")
+                    or item.get("exame_id")
+                    or item.get("tipo_exame_id")
+                    or item.get("treinamento_id")
+                    or item.get("nome")
+                    or item.get("descricao")
+                    or ""
+                ).strip()
+                if not ref:
+                    continue
+                q_raw = item.get("quantidade") or item.get("qtd")
+                qtd = None
+                if q_raw is not None:
+                    try:
+                        qtd = int(q_raw)
+                    except Exception:
+                        qtd = None
+                resultado[ref] = qtd
+            else:
+                ref = str(item or "").strip()
+                if ref:
+                    resultado[ref] = None
+        return resultado
+
+    texto = str(estrutura).strip()
     if not texto:
-        return []
+        return resultado
+
     if "," in texto:
-        return [p.strip() for p in texto.split(",") if p.strip()]
-    return [texto]
+        for parte in texto.split(","):
+            limpo = parte.strip().strip("'\"")
+            if limpo:
+                resultado[limpo] = None
+        return resultado
+
+    resultado[texto.strip("'\"")] = None
+    return resultado
 
 
 def _resolver_funcao_colaborador(colab: dict, funcoes: list[dict]) -> tuple[str | None, str]:
@@ -120,34 +192,59 @@ def _obter_requisito_funcao(
     return None
 
 
-def _mapear_itens_por_referencia(
-    referencias: list[str], catalogo: list[dict], campos_rotulo: tuple[str, ...]
+def _coletar_refs_por_palavra_chave(req_funcao: dict | None, palavras: tuple[str, ...]) -> dict[str, int | None]:
+    coletado: dict[str, int | None] = {}
+    if not req_funcao:
+        return coletado
+
+    for col, val in req_funcao.items():
+        col_norm = _normalizar(col)
+        if col_norm in ("id", "funcao_id", "cargo_id", "created_at", "updated_at"):
+            continue
+        if any(p in col_norm for p in palavras):
+            mapa_parcial = _extrair_mapa_referencias_e_qtds(val)
+            for ref, qtd in mapa_parcial.items():
+                if ref not in coletado or coletado[ref] is None:
+                    coletado[ref] = qtd
+    return coletado
+
+
+def _resolver_itens_catalogo(
+    refs_qtd: dict[str, int | None],
+    catalogo: list[dict],
+    campos_rotulo: tuple[str, ...],
 ) -> list[dict]:
-    if not referencias:
+    if not refs_qtd:
         return []
+
     mapa_id = {str(item.get("id") or "").strip(): item for item in catalogo if item.get("id") is not None}
     mapa_rotulo = {}
     for item in catalogo:
-        for c in campos_rotulo:
-            val = _normalizar(item.get(c))
-            if val:
-                mapa_rotulo[val] = item
+        for campo in campos_rotulo:
+            val_norm = _normalizar(item.get(campo))
+            if val_norm:
+                mapa_rotulo[val_norm] = item
 
-    encontrados = []
-    vistos = set()
-    for ref in referencias:
-        item = mapa_id.get(ref) or mapa_rotulo.get(_normalizar(ref))
-        if item:
-            iid = str(item.get("id") or _normalizar(ref))
-            if iid not in vistos:
-                vistos.add(iid)
-                encontrados.append(item)
-        else:
-            chave = _normalizar(ref)
-            if chave not in vistos:
-                vistos.add(chave)
-                encontrados.append({"nome": ref, "descricao": ref})
-    return encontrados
+    itens_resolvidos: list[dict] = []
+    vistos: set[str] = set()
+
+    for ref, qtd in refs_qtd.items():
+        item_cat = mapa_id.get(ref) or mapa_rotulo.get(_normalizar(ref))
+        if not item_cat:
+            # Ignora chaves não encontradas no catálogo para não gerar linhas vazias/corrompidas
+            continue
+
+        item_id = str(item_cat.get("id") or _normalizar(ref)).strip()
+        if item_id in vistos:
+            continue
+        vistos.add(item_id)
+
+        combinado = dict(item_cat)
+        if qtd is not None:
+            combinado["_qtd_requisito"] = qtd
+        itens_resolvidos.append(combinado)
+
+    return itens_resolvidos
 
 
 def render_relatorio_colaborador() -> None:
@@ -167,7 +264,6 @@ def render_relatorio_colaborador() -> None:
     funcoes = _buscar_tabela("funcoes")
     funcao_requisitos = _buscar_tabela("funcao_requisitos")
     epis = _buscar_tabela("epis")
-    historico_trocas = _buscar_tabela("historico_trocas_epi")
     tipos_exames = _buscar_tabela("tipos_exames")
     exames_colab = _buscar_tabela("exames_colaborador")
     treinamentos = _buscar_tabela("treinamentos")
@@ -196,7 +292,7 @@ def render_relatorio_colaborador() -> None:
     colab_atual = mapa_colabs.get(colab_sel_id, {})
     funcao_id, nome_funcao = _resolver_funcao_colaborador(colab_atual, funcoes)
     matricula = str(colab_atual.get("matricula") or "—").strip()
-    setor = str(colab_atual.get("setor") or colab_atual.get("departamento") or "—").strip()
+    setor = str(colab_atual.get("setor") or colab_atual.get("centro_custo") or colab_atual.get("departamento") or "—").strip()
     status = str(colab_atual.get("status") or "Ativo").strip()
     nome_colab = str(colab_atual.get("nome_completo") or colab_atual.get("nome") or "—").strip()
 
@@ -209,18 +305,9 @@ def render_relatorio_colaborador() -> None:
 
     req_funcao = _obter_requisito_funcao(funcao_requisitos, funcao_id, nome_funcao)
 
-    refs_epi = []
-    refs_exame = []
-    refs_trein = []
-    if req_funcao:
-        for k, v in req_funcao.items():
-            kl = k.lower()
-            if "epi" in kl and k not in ("id", "funcao_id", "cargo_id"):
-                refs_epi.extend(_extrair_valores_lista_ou_campo(v))
-            elif "exame" in kl:
-                refs_exame.extend(_extrair_valores_lista_ou_campo(v))
-            elif "trein" in kl:
-                refs_trein.extend(_extrair_valores_lista_ou_campo(v))
+    refs_epi = _coletar_refs_por_palavra_chave(req_funcao, ("epi",))
+    refs_exame = _coletar_refs_por_palavra_chave(req_funcao, ("exame",))
+    refs_trein = _coletar_refs_por_palavra_chave(req_funcao, ("trein",))
 
     tab1, tab2, tab3 = st.tabs([
         "👤 Visão por Colaborador",
@@ -230,50 +317,27 @@ def render_relatorio_colaborador() -> None:
 
     with tab1:
         st.subheader("🥽 EPIs")
-        epis_req = _mapear_itens_por_referencia(
+        epis_req = _resolver_itens_catalogo(
             refs_epi, epis, ("descricao", "nome_epi", "codigo_sku", "numero_ca")
         )
-        trocas_colab = [
-            t for t in historico_trocas if str(t.get("colaborador_id") or "").strip() == colab_sel_id
-        ]
-        mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id") is not None}
-
         if epis_req:
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "SKU": str(e.get("codigo_sku") or e.get("sku") or "—"),
-                        "EPI": str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "—"),
-                        "Nº CA": str(e.get("numero_ca") or e.get("ca") or "—"),
-                        "Validade CA": _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca")),
-                    }
-                    for e in epis_req
-                ]),
-                use_container_width=True,
-                hide_index=True,
-            )
-        elif trocas_colab:
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "EPI": str(
-                            (mapa_epis.get(str(t.get("epi_id") or "").strip()) or {}).get("descricao")
-                            or (mapa_epis.get(str(t.get("epi_id") or "").strip()) or {}).get("nome_epi")
-                            or "—"
-                        ),
-                        "Quantidade": t.get("quantidade") or "—",
-                        "Data": _formatar_data_br(t.get("data_entrega") or t.get("data_troca") or t.get("created_at")),
-                    }
-                    for t in trocas_colab
-                ]),
-                use_container_width=True,
-                hide_index=True,
-            )
+            linhas_epi = []
+            for e in epis_req:
+                linha = {
+                    "SKU": str(e.get("codigo_sku") or e.get("sku") or "—"),
+                    "EPI": str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "—"),
+                    "Nº CA": str(e.get("numero_ca") or e.get("ca") or "—"),
+                    "Validade CA": _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca")),
+                }
+                if "_qtd_requisito" in e and e["_qtd_requisito"] is not None:
+                    linha["Qtd. Agrupamento"] = e["_qtd_requisito"]
+                linhas_epi.append(linha)
+            st.dataframe(pd.DataFrame(linhas_epi), use_container_width=True, hide_index=True)
         else:
             st.info("Nenhum EPI vinculado à função deste colaborador.")
 
         st.subheader("📋 Exames")
-        exames_req = _mapear_itens_por_referencia(
+        exames_req = _resolver_itens_catalogo(
             refs_exame, tipos_exames, ("nome", "descricao", "tipo_exame")
         )
         exames_do_colab = [
@@ -304,7 +368,12 @@ def render_relatorio_colaborador() -> None:
                 pd.DataFrame([
                     {
                         "Exame": str(tx.get("nome") or tx.get("descricao") or "—"),
-                        "Periodicidade": str(tx.get("periodicidade_meses") or tx.get("periodicidade") or "—"),
+                        "Periodicidade": str(
+                            tx.get("periodicidade_meses")
+                            or tx.get("validade_meses")
+                            or tx.get("periodicidade")
+                            or "—"
+                        ),
                     }
                     for tx in exames_req
                 ]),
@@ -318,7 +387,7 @@ def render_relatorio_colaborador() -> None:
         trein_do_colab = [
             tr for tr in treinamentos if str(tr.get("colaborador_id") or "").strip() == colab_sel_id
         ]
-        trein_req = _mapear_itens_por_referencia(
+        trein_req = _resolver_itens_catalogo(
             refs_trein, treinamentos, ("nome", "titulo", "descricao")
         )
 
