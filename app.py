@@ -3,6 +3,7 @@ import streamlit as st
 from modules.colaboradores import render_colaboradores
 from modules.epis import render_epis
 from modules.funcoes import render_funcoes
+from modules.inventario import render_inventario
 from modules.matriz_funcao import render_matriz_funcao, render_voltar_matriz_se_necessario
 from modules.relatorio_colaborador import render_relatorio_colaborador
 from modules.tipos_exames import render_tipos_exames
@@ -20,6 +21,7 @@ OPCOES_MENU = [
     "💼 Cadastro de Cargos",
     "👥 Cadastro de Colaborador",
     "🥽 Cadastro de EPIs",
+    "📦 Cadastro de Inventário",
     "📋 Cadastro de Exames",
     "🎓 Cadastro de Treinamentos",
 ]
@@ -65,6 +67,9 @@ def main() -> None:
     elif menu == "🥽 Cadastro de EPIs":
         render_voltar_matriz_se_necessario()
         render_epis()
+    elif menu == "📦 Cadastro de Inventário":
+        render_voltar_matriz_se_necessario()
+        render_inventario()
     elif menu == "📋 Cadastro de Exames":
         render_voltar_matriz_se_necessario()
         render_tipos_exames()
