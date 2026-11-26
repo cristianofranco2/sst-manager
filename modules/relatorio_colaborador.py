@@ -2,16 +2,31 @@ from datetime import date, datetime, timedelta
 import ast
 import io
 import json
+import os
 import re
 import unicodedata
+import zlib
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
 from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
 COLUNAS_QTD_INVENTARIO = ("quantidade_disponivel", "quantidade", "saldo", "qtd_disponivel", "qtd")
+CAMINHOS_LOGO_CANDIDATOS = (
+    "Logo.png",
+    "logo.png",
+    "assets/Logo.png",
+    "assets/logo.png",
+    "images/Logo.png",
+    "images/logo.png",
+)
 
 
 @st.cache_data(ttl=10, show_spinner=False)
@@ -451,6 +466,9 @@ def _montar_historico_colaborador(
     treinamentos: list[dict],
     mapa_epis: dict[str, dict],
     mapa_tipos_ex: dict[str, dict],
+    funcao_id: str | None = None,
+    nome_funcao: str = "—",
+    refs_trein: dict[str, int | None] | None = None,
 ) -> list[dict]:
     itens: list[dict] = []
 
@@ -499,21 +517,48 @@ def _montar_historico_colaborador(
             "Detalhes": det_ex,
         })
 
+    # Treinamentos: diretos do colaborador, vinculados à função/cargo ou gerais sem colaborador_id
+    refs_norm = {_normalizar(k) for k in (refs_trein or {}).keys() if _normalizar(k)}
+    trein_selecionados: list[dict] = []
+    vistos_tr: set[str] = set()
+
     for tr in treinamentos:
-        if str(tr.get("colaborador_id") or "").strip() != colab_id:
-            continue
+        tr_cid = str(tr.get("colaborador_id") or "").strip()
+        tr_fid = str(tr.get("funcao_id") or tr.get("cargo_id") or "").strip()
+        tr_fnome = _normalizar(tr.get("funcao") or tr.get("cargo") or tr.get("nome_funcao") or tr.get("nome_cargo"))
+        nome_tr = _nome_treinamento(tr)
+        tr_id = str(tr.get("id") or "").strip()
+
+        match_colab = bool(tr_cid and tr_cid == colab_id)
+        match_func = bool(
+            (funcao_id and tr_fid and tr_fid == funcao_id)
+            or (nome_funcao and nome_funcao != "—" and tr_fnome and tr_fnome == _normalizar(nome_funcao))
+        )
+        match_req = bool(
+            refs_norm and ((tr_id and _normalizar(tr_id) in refs_norm) or (_normalizar(nome_tr) in refs_norm))
+        )
+        match_geral = not tr_cid and not tr_fid and not tr_fnome
+
+        if match_colab or match_func or match_req or match_geral:
+            chave = str(tr.get("id") or f"{_normalizar(nome_tr)}_{tr.get('data_realizacao') or tr.get('data_vencimento') or ''}")
+            if chave not in vistos_tr:
+                vistos_tr.add(chave)
+                trein_selecionados.append(tr)
+
+    for tr in trein_selecionados:
         nome_tr = _nome_treinamento(tr)
         venc_raw = tr.get("data_vencimento") or tr.get("validade")
         bol, rot = _indicador_vencimento(venc_raw)
         det_tr = str(tr.get("observacoes") or tr.get("carga_horaria") or "").strip().upper()
         if not det_tr:
             det_tr = f"TREINAMENTO REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
+        dt_mov_tr = tr.get("data_realizacao") or tr.get("data_conclusao") or tr.get("created_at") or venc_raw
         itens.append({
             "Colaborador": nome_colab,
             "Categoria": "TREINAMENTOS",
             "Tipo": "RENOVAÇÃO DE TREINAMENTO",
             "Item": nome_tr,
-            "Data": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_conclusao") or tr.get("created_at")),
+            "Data": _formatar_data_br(dt_mov_tr),
             "Vencimento": _formatar_data_br(venc_raw),
             "Status": f"{bol} {rot}",
             "Detalhes": det_tr,
@@ -565,6 +610,28 @@ def _quebrar_linhas(texto: str, max_chars: int) -> list[str]:
     return linhas or [""]
 
 
+def _carregar_logo_rgb_para_pdf() -> tuple[int, int, bytes] | None:
+    """Carrega Logo.png em RGB sobre fundo branco para embutir direto no PDF."""
+    if Image is None:
+        return None
+    for caminho in CAMINHOS_LOGO_CANDIDATOS:
+        if os.path.isfile(caminho):
+            try:
+                img = Image.open(caminho)
+                if img.mode in ("RGBA", "LA") or "transparency" in img.info:
+                    rgba = img.convert("RGBA")
+                    bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                    img_rgb = Image.alpha_composite(bg, rgba).convert("RGB")
+                else:
+                    img_rgb = img.convert("RGB")
+                w, h = img_rgb.size
+                if w > 0 and h > 0:
+                    return w, h, img_rgb.tobytes("raw", "RGB")
+            except Exception:
+                continue
+    return None
+
+
 def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict]) -> bytes:
     try:
         agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
@@ -577,44 +644,48 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
     margin_x = 34.0
     usable_w = page_w - 2 * margin_x
 
+    logo_img = _carregar_logo_rgb_para_pdf()
+    has_logo_img = logo_img is not None
+    logo_draw_w = 88.0
+    logo_draw_h = 34.0
+    if has_logo_img:
+        iw, ih, _ = logo_img
+        proporcao = min(logo_draw_w / float(iw), logo_draw_h / float(ih))
+        logo_draw_w = iw * proporcao
+        logo_draw_h = ih * proporcao
+
     paginas_cmds: list[list[str]] = []
 
     def desenhar_logo_globex(cmds: list[str], x_left: float, y_top: float) -> None:
-        # Bloco lateral azul/vermelho + GLOBEX / MULTIMODAL sem sobreposição
-        bx = x_left
-        by = y_top - 24.0
-        bw = 10.0
-        bh = 22.0
+        if has_logo_img:
+            y_img = y_top - logo_draw_h + 4.0
+            cmds.append(f"q {logo_draw_w:.2f} 0 0 {logo_draw_h:.2f} {x_left:.2f} {y_img:.2f} cm /ImLogo Do Q")
+            return
 
-        cmds.append("0.08 0.28 0.56 rg")
-        cmds.append(f"{bx:.1f} {by + 5.0:.1f} {bw:.1f} {bh - 5.0:.1f} re f")
-        cmds.append("0.78 0.14 0.20 rg")
-        cmds.append(f"{bx:.1f} {by:.1f} {bw:.1f} 4.0 re f")
-
-        tx = bx + bw + 6.0
-        cmds.append("0.07 0.22 0.45 rg")
-        cmds.append(f"BT /F2 12.5 Tf {tx:.1f} {y_top - 12:.1f} Td ({_escapar_pdf('GLOBEX')}) Tj ET")
-        cmds.append("0.20 0.44 0.72 rg")
-        cmds.append(f"BT /F2 7.0 Tf {tx:.1f} {y_top - 22:.1f} Td ({_escapar_pdf('MULTIMODAL')}) Tj ET")
+        # Fallback tipográfico caso o arquivo de imagem não esteja na pasta do app
+        cmds.append("0.04 0.22 0.33 rg")
+        cmds.append(f"BT /F2 13 Tf {x_left:.1f} {y_top - 11:.1f} Td ({_escapar_pdf('GLOBEX')}) Tj ET")
+        cmds.append("0.04 0.22 0.33 rg")
+        cmds.append(f"BT /F1 7.5 Tf {x_left + 12:.1f} {y_top - 22:.1f} Td ({_escapar_pdf('MULTIMODAL')}) Tj ET")
 
     def nova_pagina() -> tuple[list[str], float]:
         cmds: list[str] = []
         top_header_y = page_h - 32.0
         desenhar_logo_globex(cmds, margin_x, top_header_y)
 
-        x_info = margin_x + 92.0
+        x_info = margin_x + (logo_draw_w + 14.0 if has_logo_img else 96.0)
         cmds.append("0.11 0.15 0.21 rg")
         cmds.append(
-            f"BT /F2 11.5 Tf {x_info:.1f} {top_header_y - 11:.1f} Td "
+            f"BT /F2 11.5 Tf {x_info:.1f} {top_header_y - 10:.1f} Td "
             f"({_escapar_pdf('GLOBEX MULTIMODAL')}) Tj ET"
         )
 
         cmds.append("0.18 0.22 0.28 rg")
         l_sub1 = _quebrar_linhas(
             "Comprovante de Trocas de EPI e Renovacoes de Exames / Treinamentos (Auditoria / Fiscalizacao)",
-            74,
+            72,
         )
-        y_sub = top_header_y - 23.0
+        y_sub = top_header_y - 22.0
         for idx_s, s_txt in enumerate(l_sub1):
             cmds.append(
                 f"BT /F1 9 Tf {x_info:.1f} {y_sub - idx_s * 11.0:.1f} Td ({_escapar_pdf(s_txt)}) Tj ET"
@@ -763,14 +834,36 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
 
     objetos: list[bytes] = []
     num_pag = len(paginas_cmds)
-    page_ids = [5 + i * 2 for i in range(num_pag)]
-    content_ids = [5 + i * 2 + 1 for i in range(num_pag)]
+
+    if has_logo_img:
+        iw, ih, rgb_bytes = logo_img
+        img_stream = zlib.compress(rgb_bytes, level=6)
+        img_obj_id = 5
+        page_start_id = 6
+        xobj_ref = f"/XObject << /ImLogo {img_obj_id} 0 R >> "
+    else:
+        img_obj_id = None
+        page_start_id = 5
+        xobj_ref = ""
+
+    page_ids = [page_start_id + i * 2 for i in range(num_pag)]
+    content_ids = [page_start_id + i * 2 + 1 for i in range(num_pag)]
 
     objetos.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
     kids = " ".join(f"{pid} 0 R" for pid in page_ids)
     objetos.append(f"2 0 obj\n<< /Type /Pages /Kids [{kids}] /Count {num_pag} >>\nendobj\n".encode("ascii"))
     objetos.append(b"3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
     objetos.append(b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n")
+
+    if has_logo_img and img_obj_id is not None:
+        img_obj = (
+            f"{img_obj_id} 0 obj\n"
+            f"<< /Type /XObject /Subtype /Image /Width {iw} /Height {ih} "
+            f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+            f"/Length {len(img_stream)} >>\n"
+            f"stream\n"
+        ).encode("ascii") + img_stream + b"\nendstream\nendobj\n"
+        objetos.append(img_obj)
 
     for i_p, cmds_p in enumerate(paginas_cmds):
         pid = page_ids[i_p]
@@ -779,7 +872,7 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
         page_obj = (
             f"{pid} 0 obj\n"
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {int(page_w)} {int(page_h)}] "
-            f"/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> "
+            f"/Resources << /Font << /F1 3 0 R /F2 4 0 R >> {xobj_ref}>> "
             f"/Contents {cid} 0 R >>\n"
             f"endobj\n"
         ).encode("ascii")
@@ -1031,18 +1124,20 @@ def render_relatorio_colaborador() -> None:
 
     mapa_colabs = {}
     mapa_nomes_colabs = {}
+    mapa_info_colabs = {}
     rotulos = []
     for c in colaboradores:
         cid = str(c.get("id") or "").strip()
         if not cid:
             continue
         mapa_colabs[cid] = c
-        _, nome_func = _resolver_funcao_colaborador(c, funcoes, cargos)
+        fid_c, nome_func_c = _resolver_funcao_colaborador(c, funcoes, cargos)
         matricula = str(c.get("matricula") or "—").strip().upper()
         status = str(c.get("status") or "ATIVO").strip().upper()
         nome_c = str(c.get("nome_completo") or c.get("nome") or "COLABORADOR").strip().upper()
         mapa_nomes_colabs[cid] = nome_c
-        rotulos.append((cid, f"{nome_c} ({matricula}) — {nome_func} [{status}]"))
+        mapa_info_colabs[cid] = {"funcao_id": fid_c, "nome_funcao": nome_func_c}
+        rotulos.append((cid, f"{nome_c} ({matricula}) — {nome_func_c} [{status}]"))
 
     with col_f:
         colab_sel_id = st.selectbox(
@@ -1086,7 +1181,16 @@ def render_relatorio_colaborador() -> None:
     mapa_tipos_ex = {str(tx.get("id") or "").strip(): tx for tx in tipos_exames if tx.get("id") is not None}
 
     historico_itens = _montar_historico_colaborador(
-        colab_sel_id, nome_colab, historico_trocas, exames_colab, treinamentos, mapa_epis, mapa_tipos_ex
+        colab_sel_id,
+        nome_colab,
+        historico_trocas,
+        exames_colab,
+        treinamentos,
+        mapa_epis,
+        mapa_tipos_ex,
+        funcao_id=funcao_id,
+        nome_funcao=nome_funcao,
+        refs_trein=refs_trein,
     )
     trocas_do_colab = [
         t for t in historico_trocas if str(t.get("colaborador_id") or "").strip() == colab_sel_id
@@ -1395,6 +1499,11 @@ def render_relatorio_colaborador() -> None:
             base_periodo: list[dict] = []
             alvos_colab = list(mapa_nomes_colabs.keys()) if colab_per_sel == "TODOS" else [colab_per_sel]
             for cid_alvo in alvos_colab:
+                info_c = mapa_info_colabs.get(cid_alvo, {})
+                req_c = _obter_requisito_funcao(
+                    funcao_requisitos, info_c.get("funcao_id"), info_c.get("nome_funcao", "—")
+                )
+                refs_tr_c = _coletar_refs_por_palavra_chave(req_c, ("trein", "curso", "nr"))
                 base_periodo.extend(
                     _montar_historico_colaborador(
                         cid_alvo,
@@ -1404,6 +1513,9 @@ def render_relatorio_colaborador() -> None:
                         treinamentos,
                         mapa_epis,
                         mapa_tipos_ex,
+                        funcao_id=info_c.get("funcao_id"),
+                        nome_funcao=info_c.get("nome_funcao", "—"),
+                        refs_trein=refs_tr_c,
                     )
                 )
 
