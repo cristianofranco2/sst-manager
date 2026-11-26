@@ -64,6 +64,29 @@ def _extrair_id_inserido(res) -> str | None:
     return None
 
 
+def _inserir_epi_com_fallback(supabase, payload: dict):
+    """
+    Insere na tabela 'epis' e, se ocorrer PGRST204 por coluna inexistente,
+    remove a coluna indicada na mensagem de erro e tenta novamente.
+    """
+    dados = dict(payload)
+    for _ in range(8):
+        try:
+            return supabase.table("epis").insert(dados).execute()
+        except Exception as e:
+            msg = str(e)
+            if "PGRST204" in msg and "column of 'epis'" in msg:
+                # Extrai o nome da coluna entre aspas simples: 'nome_coluna'
+                partes = msg.split("'")
+                if len(partes) >= 2:
+                    col_invalida = partes[1].strip()
+                    if col_invalida in dados:
+                        dados.pop(col_invalida)
+                        continue
+            raise
+    return supabase.table("epis").insert(dados).execute()
+
+
 def _inserir_entrada_inicial_inventario(
     supabase,
     epi_id: str,
@@ -92,21 +115,22 @@ def _inserir_entrada_inicial_inventario(
         "observacoes": observacoes,
     }
 
-    try:
-        supabase.table("inventario_epi").insert(payload).execute()
-        return True, None
-    except Exception as e:
-        msg = str(e)
-        # Fallback caso alguma coluna opcional não exista na tabela inventario_epi
-        if "PGRST204" in msg or "column" in msg.lower():
-            for col_opcional in ["observacoes", "codigo_lote", "data_entrada"]:
-                payload_reduzido = {k: v for k, v in payload.items() if k != col_opcional}
-                try:
-                    supabase.table("inventario_epi").insert(payload_reduzido).execute()
-                    return True, None
-                except Exception:
-                    continue
-        return False, msg
+    dados = dict(payload)
+    for _ in range(8):
+        try:
+            supabase.table("inventario_epi").insert(dados).execute()
+            return True, None
+        except Exception as e:
+            msg = str(e)
+            if "PGRST204" in msg and "column of 'inventario_epi'" in msg:
+                partes = msg.split("'")
+                if len(partes) >= 2:
+                    col_invalida = partes[1].strip()
+                    if col_invalida in dados:
+                        dados.pop(col_invalida)
+                        continue
+            return False, msg
+    return False, "Não foi possível inserir a entrada inicial no inventário."
 
 
 def render_epis() -> None:
@@ -205,14 +229,12 @@ def render_epis() -> None:
                             "modelo": modelo.strip(),
                             "ca": ca.strip(),
                             "data_validade_ca": str(validade_ca),
-                            "durabilidade_dias": int(durabilidade_dias),
                             "estoque_minimo": int(estoque_minimo),
                         }
-                        res_epi = supabase.table("epis").insert(novo_epi).execute()
+                        res_epi = _inserir_epi_com_fallback(supabase, novo_epi)
                         epi_id = _extrair_id_inserido(res_epi)
 
                         if not epi_id:
-                            # Busca o ID recém-criado caso o retorno venha vazio
                             busca = (
                                 supabase.table("epis")
                                 .select("id")
