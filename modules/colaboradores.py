@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -47,7 +48,7 @@ def _formatar_data_br(valor) -> str:
 
 
 def render_colaboradores() -> None:
-    st.title("👥 Cadastro de Colaborador")
+    render_cabecalho_modulo("👥 Cadastro de Colaborador")
 
     try:
         supabase = get_supabase()
