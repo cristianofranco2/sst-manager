@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -20,7 +21,7 @@ def _buscar_funcoes() -> list[dict]:
 
 
 def render_funcoes() -> None:
-    st.title("💼 Cadastro de Cargos")
+    render_cabecalho_modulo("💼 Cadastro de Cargos")
 
     try:
         supabase = get_supabase()
@@ -104,7 +105,6 @@ def render_funcoes() -> None:
                 )
 
             ativo = st.checkbox("Cargo ativo", value=True)
-
             submitted = st.form_submit_button("💾 Salvar Cargo")
 
             if submitted:
