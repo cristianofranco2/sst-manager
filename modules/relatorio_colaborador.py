@@ -442,6 +442,85 @@ def _formatar_periodo_meses(val) -> str:
         return txt
 
 
+def _montar_historico_colaborador(
+    colab_id: str,
+    nome_colab: str,
+    historico_trocas: list[dict],
+    exames_colab: list[dict],
+    treinamentos: list[dict],
+    mapa_epis: dict[str, dict],
+    mapa_tipos_ex: dict[str, dict],
+) -> list[dict]:
+    itens: list[dict] = []
+
+    for t in historico_trocas:
+        if str(t.get("colaborador_id") or "").strip() != colab_id:
+            continue
+        ep = mapa_epis.get(str(t.get("epi_id") or "").strip(), {})
+        nome_e = str(ep.get("descricao") or ep.get("nome_epi") or ep.get("nome") or "EPI").strip().upper()
+        dt_entrega_raw = t.get("data_entrega") or t.get("data_troca") or t.get("created_at")
+        dt_entrega = _parse_data(dt_entrega_raw)
+        dur_dias = _durabilidade_dias_epi(ep)
+        dt_venc_epi = (dt_entrega + timedelta(days=dur_dias)) if dt_entrega else None
+        bol_epi, rot_epi = _indicador_vencimento(dt_venc_epi)
+        obs_t = str(t.get("motivo") or t.get("observacoes") or "").strip().upper()
+        det_t = f"QTD: {t.get('quantidade') or 1} | DUR.: {dur_dias} DIAS" + (f" — {obs_t}" if obs_t else "")
+        itens.append({
+            "Colaborador": nome_colab,
+            "Categoria": "EPIS",
+            "Tipo": "TROCA DE EPI",
+            "Item": nome_e,
+            "Data": _formatar_data_br(dt_entrega),
+            "Vencimento": _formatar_data_br(dt_venc_epi),
+            "Status": f"{bol_epi} {rot_epi}",
+            "Detalhes": det_t,
+        })
+
+    for ex in exames_colab:
+        if str(ex.get("colaborador_id") or "").strip() != colab_id:
+            continue
+        tx_id = str(ex.get("tipo_exame_id") or ex.get("exame_id") or "").strip()
+        tx_info = mapa_tipos_ex.get(tx_id, {})
+        nome_ex = _nome_exame({**tx_info, **ex})
+        venc_raw = ex.get("data_vencimento") or ex.get("proximo_vencimento") or ex.get("validade")
+        bol, rot = _indicador_vencimento(venc_raw)
+        det_ex = str(ex.get("observacoes") or ex.get("resultado") or "").strip().upper()
+        if not det_ex:
+            det_ex = f"EXAME REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
+        itens.append({
+            "Colaborador": nome_colab,
+            "Categoria": "EXAMES",
+            "Tipo": "RENOVAÇÃO DE EXAME",
+            "Item": nome_ex,
+            "Data": _formatar_data_br(ex.get("data_realizacao") or ex.get("data_exame") or ex.get("created_at")),
+            "Vencimento": _formatar_data_br(venc_raw),
+            "Status": f"{bol} {rot}",
+            "Detalhes": det_ex,
+        })
+
+    for tr in treinamentos:
+        if str(tr.get("colaborador_id") or "").strip() != colab_id:
+            continue
+        nome_tr = _nome_treinamento(tr)
+        venc_raw = tr.get("data_vencimento") or tr.get("validade")
+        bol, rot = _indicador_vencimento(venc_raw)
+        det_tr = str(tr.get("observacoes") or tr.get("carga_horaria") or "").strip().upper()
+        if not det_tr:
+            det_tr = f"TREINAMENTO REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
+        itens.append({
+            "Colaborador": nome_colab,
+            "Categoria": "TREINAMENTOS",
+            "Tipo": "RENOVAÇÃO DE TREINAMENTO",
+            "Item": nome_tr,
+            "Data": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_conclusao") or tr.get("created_at")),
+            "Vencimento": _formatar_data_br(venc_raw),
+            "Status": f"{bol} {rot}",
+            "Detalhes": det_tr,
+        })
+
+    return itens
+
+
 def _latin1(texto: str) -> str:
     return str(texto or "").encode("latin-1", "replace").decode("latin-1")
 
@@ -891,6 +970,7 @@ def render_relatorio_colaborador() -> None:
     treinamentos = _buscar_tabela("treinamentos")
 
     mapa_colabs = {}
+    mapa_nomes_colabs = {}
     rotulos = []
     for c in colaboradores:
         cid = str(c.get("id") or "").strip()
@@ -901,6 +981,7 @@ def render_relatorio_colaborador() -> None:
         matricula = str(c.get("matricula") or "—").strip().upper()
         status = str(c.get("status") or "ATIVO").strip().upper()
         nome_c = str(c.get("nome_completo") or c.get("nome") or "COLABORADOR").strip().upper()
+        mapa_nomes_colabs[cid] = nome_c
         rotulos.append((cid, f"{nome_c} ({matricula}) — {nome_func} [{status}]"))
 
     with col_f:
@@ -944,69 +1025,15 @@ def render_relatorio_colaborador() -> None:
     mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id") is not None}
     mapa_tipos_ex = {str(tx.get("id") or "").strip(): tx for tx in tipos_exames if tx.get("id") is not None}
 
-    historico_itens: list[dict] = []
-
+    historico_itens = _montar_historico_colaborador(
+        colab_sel_id, nome_colab, historico_trocas, exames_colab, treinamentos, mapa_epis, mapa_tipos_ex
+    )
     trocas_do_colab = [
         t for t in historico_trocas if str(t.get("colaborador_id") or "").strip() == colab_sel_id
     ]
-    for t in trocas_do_colab:
-        ep = mapa_epis.get(str(t.get("epi_id") or "").strip(), {})
-        nome_e = str(ep.get("descricao") or ep.get("nome_epi") or ep.get("nome") or "EPI").strip().upper()
-        dt_entrega_raw = t.get("data_entrega") or t.get("data_troca") or t.get("created_at")
-        dt_entrega = _parse_data(dt_entrega_raw)
-        dur_dias = _durabilidade_dias_epi(ep)
-        dt_venc_epi = (dt_entrega + timedelta(days=dur_dias)) if dt_entrega else None
-        bol_epi, rot_epi = _indicador_vencimento(dt_venc_epi)
-        obs_t = str(t.get("motivo") or t.get("observacoes") or "").strip().upper()
-        det_t = f"QTD: {t.get('quantidade') or 1} | DUR.: {dur_dias} DIAS" + (f" — {obs_t}" if obs_t else "")
-        historico_itens.append({
-            "Tipo": "TROCA DE EPI",
-            "Item": nome_e,
-            "Data": _formatar_data_br(dt_entrega),
-            "Vencimento": _formatar_data_br(dt_venc_epi),
-            "Status": f"{bol_epi} {rot_epi}",
-            "Detalhes": det_t,
-        })
-
     exames_do_colab = [
         ex for ex in exames_colab if str(ex.get("colaborador_id") or "").strip() == colab_sel_id
     ]
-    for ex in exames_do_colab:
-        tx_id = str(ex.get("tipo_exame_id") or ex.get("exame_id") or "").strip()
-        tx_info = mapa_tipos_ex.get(tx_id, {})
-        nome_ex = _nome_exame({**tx_info, **ex})
-        venc_raw = ex.get("data_vencimento") or ex.get("proximo_vencimento") or ex.get("validade")
-        bol, rot = _indicador_vencimento(venc_raw)
-        det_ex = str(ex.get("observacoes") or ex.get("resultado") or "").strip().upper()
-        if not det_ex:
-            det_ex = f"EXAME REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
-        historico_itens.append({
-            "Tipo": "RENOVAÇÃO DE EXAME",
-            "Item": nome_ex,
-            "Data": _formatar_data_br(ex.get("data_realizacao") or ex.get("data_exame") or ex.get("created_at")),
-            "Vencimento": _formatar_data_br(venc_raw),
-            "Status": f"{bol} {rot}",
-            "Detalhes": det_ex,
-        })
-
-    trein_do_colab = [
-        tr for tr in treinamentos if str(tr.get("colaborador_id") or "").strip() == colab_sel_id
-    ]
-    for tr in trein_do_colab:
-        nome_tr = _nome_treinamento(tr)
-        venc_raw = tr.get("data_vencimento") or tr.get("validade")
-        bol, rot = _indicador_vencimento(venc_raw)
-        det_tr = str(tr.get("observacoes") or tr.get("carga_horaria") or "").strip().upper()
-        if not det_tr:
-            det_tr = f"TREINAMENTO REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
-        historico_itens.append({
-            "Tipo": "RENOVAÇÃO DE TREINAMENTO",
-            "Item": nome_tr,
-            "Data": _formatar_data_br(tr.get("data_realizacao") or tr.get("data_conclusao") or tr.get("created_at")),
-            "Vencimento": _formatar_data_br(venc_raw),
-            "Status": f"{bol} {rot}",
-            "Detalhes": det_tr,
-        })
 
     tab1, tab2, tab3 = st.tabs([
         "👤 Visão por Colaborador",
@@ -1252,7 +1279,9 @@ def render_relatorio_colaborador() -> None:
     with tab2:
         st.subheader("🕒 Histórico do Colaborador")
         if historico_itens:
-            st.dataframe(pd.DataFrame(historico_itens), use_container_width=True, hide_index=True)
+            cols_hist = ["Tipo", "Item", "Data", "Vencimento", "Status", "Detalhes"]
+            df_hist = pd.DataFrame(historico_itens)[[c for c in cols_hist if c in historico_itens[0]]]
+            st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
             pdf_bytes = _gerar_pdf_auditoria_bytes(
                 resumo_colab={
@@ -1279,22 +1308,63 @@ def render_relatorio_colaborador() -> None:
 
     with tab3:
         st.subheader("📊 Relatório por Período")
-        p1, p2 = st.columns(2)
-        with p1:
-            dt_ini = st.date_input("Data Inicial", value=date.today().replace(day=1), format="DD/MM/YYYY")
-        with p2:
-            dt_fim = st.date_input("Data Final", value=date.today(), format="DD/MM/YYYY")
+        f1, f2, f3, f4 = st.columns([1.4, 1.8, 1.3, 1.3])
+        with f1:
+            cat_sel = st.selectbox(
+                "Categoria",
+                options=["TODAS", "EPIS", "EXAMES", "TREINAMENTOS"],
+                key="filtro_cat_periodo",
+            )
+        with f2:
+            opcoes_colab_per = ["TODOS"] + [cid for cid, _ in rotulos]
+            colab_per_sel = st.selectbox(
+                "Colaborador",
+                options=opcoes_colab_per,
+                format_func=lambda cid: "TODOS OS COLABORADORES" if cid == "TODOS" else mapa_nomes_colabs.get(cid, cid),
+                index=opcoes_colab_per.index(colab_sel_id) if colab_sel_id in opcoes_colab_per else 0,
+                key="filtro_colab_periodo",
+            )
+        with f3:
+            dt_ini = st.date_input("Data Inicial", value=date.today().replace(day=1), format="DD/MM/YYYY", key="dt_ini_per")
+        with f4:
+            dt_fim = st.date_input("Data Final", value=date.today(), format="DD/MM/YYYY", key="dt_fim_per")
 
-        filtrados_periodo = []
-        for h in historico_itens:
-            dt_ref = _parse_data(h.get("Vencimento")) or _parse_data(h.get("Data"))
-            if dt_ref and dt_ini <= dt_ref <= dt_fim:
-                filtrados_periodo.append(h)
-
-        if filtrados_periodo:
-            st.dataframe(pd.DataFrame(filtrados_periodo), use_container_width=True, hide_index=True)
+        if dt_ini > dt_fim:
+            st.warning("A DATA INICIAL NÃO PODE SER MAIOR QUE A DATA FINAL.")
         else:
-            st.info("NENHUM REGISTRO ENCONTRADO NO PERÍODO SELECIONADO.")
+            base_periodo: list[dict] = []
+            alvos_colab = list(mapa_nomes_colabs.keys()) if colab_per_sel == "TODOS" else [colab_per_sel]
+            for cid_alvo in alvos_colab:
+                base_periodo.extend(
+                    _montar_historico_colaborador(
+                        cid_alvo,
+                        mapa_nomes_colabs.get(cid_alvo, "COLABORADOR"),
+                        historico_trocas,
+                        exames_colab,
+                        treinamentos,
+                        mapa_epis,
+                        mapa_tipos_ex,
+                    )
+                )
+
+            filtrados_periodo = []
+            for h in base_periodo:
+                if cat_sel != "TODAS" and h.get("Categoria") != cat_sel:
+                    continue
+                dt_mov = _parse_data(h.get("Data"))
+                dt_venc = _parse_data(h.get("Vencimento"))
+                dentro_periodo = (dt_mov is not None and dt_ini <= dt_mov <= dt_fim) or (
+                    dt_venc is not None and dt_ini <= dt_venc <= dt_fim
+                )
+                if dentro_periodo:
+                    filtrados_periodo.append(h)
+
+            if filtrados_periodo:
+                cols_per = ["Colaborador", "Categoria", "Tipo", "Item", "Data", "Vencimento", "Status", "Detalhes"]
+                df_per = pd.DataFrame(filtrados_periodo)[[c for c in cols_per if c in filtrados_periodo[0]]]
+                st.dataframe(df_per, use_container_width=True, hide_index=True)
+            else:
+                st.info("NENHUM REGISTRO ENCONTRADO PARA OS FILTROS E PERÍODO SELECIONADOS.")
 
 
 render_relatorios = render_relatorio_colaborador
