@@ -62,7 +62,7 @@ def _converter_exames_existentes_maiusculo(supabase) -> tuple[int, int]:
     return atualizados, erros
 
 
-def render_cadastro_exames() -> None:
+def render_tipos_exames() -> None:
     render_cabecalho_modulo("📋 Cadastro de Exames")
     supabase = get_supabase()
 
@@ -123,4 +123,5 @@ def render_cadastro_exames() -> None:
                     st.error(f"Erro ao salvar exame: {e}")
 
 
-render_exames = render_cadastro_exames
+render_cadastro_exames = render_tipos_exames
+render_exames = render_tipos_exames
