@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -100,7 +101,7 @@ def render_voltar_matriz_se_necessario() -> None:
 
 
 def render_matriz_funcao() -> None:
-    st.title("🧩 Agrupamento por Cargo (EPIs, Treinamentos e Exames)")
+    render_cabecalho_modulo("🧩 Agrupamento por Cargo (EPIs, Treinamentos e Exames)")
 
     try:
         supabase = get_supabase()
@@ -110,7 +111,7 @@ def render_matriz_funcao() -> None:
 
     state = _garantir_estado_matriz()
 
-    col_top1, col_top2 = st.columns([4, 1])
+    _, col_top2 = st.columns([4, 1])
     with col_top2:
         if st.button("🔄 Atualizar dados", key="btn_atualizar_matriz", use_container_width=True):
             _limpar_cache_matriz()
@@ -169,7 +170,6 @@ def render_matriz_funcao() -> None:
 
     st.markdown("---")
 
-    # BLOCO 1: EPIs + QUANTIDADE (- / +)
     b1_esq, b1_dir = st.columns([4, 1])
     with b1_esq:
         st.subheader("🥽 2. EPIs do Cargo e Quantidade")
@@ -228,7 +228,6 @@ def render_matriz_funcao() -> None:
 
     st.markdown("---")
 
-    # BLOCO 2: TREINAMENTOS
     b2_esq, b2_dir = st.columns([4, 1])
     with b2_esq:
         st.subheader("🎓 3. Treinamentos do Cargo")
@@ -266,7 +265,6 @@ def render_matriz_funcao() -> None:
 
     st.markdown("---")
 
-    # BLOCO 3: EXAMES
     b3_esq, b3_dir = st.columns([4, 1])
     with b3_esq:
         st.subheader("📋 4. Exames do Cargo")
@@ -304,7 +302,6 @@ def render_matriz_funcao() -> None:
 
     st.markdown("---")
 
-    # RESUMO E SALVAMENTO
     st.subheader("💾 Salvar Agrupamento do Cargo")
     m1, m2, m3 = st.columns(3)
     m1.metric("EPIs Selecionados", len(state["epi_ids"]))
@@ -326,7 +323,6 @@ def render_matriz_funcao() -> None:
         except Exception as e:
             st.error(f"Erro ao salvar agrupamento do cargo: {e}")
 
-    # TABELA CONSOLIDADA
     requisitos_salvos = _buscar_requisito_funcao(funcao_selecionada)
     if requisitos_salvos:
         mapa_epis = {
@@ -349,32 +345,25 @@ def render_matriz_funcao() -> None:
         resumo_linhas = []
         for eid in requisitos_salvos.get("epi_ids") or []:
             eid_str = str(eid)
-            qtd_item = qtds_salvas.get(eid_str, 1)
-            resumo_linhas.append(
-                {
-                    "Categoria": "EPI",
-                    "Item": mapa_epis.get(eid_str, eid_str),
-                    "Quantidade": qtd_item,
-                }
-            )
+            resumo_linhas.append({
+                "Categoria": "EPI",
+                "Item": mapa_epis.get(eid_str, eid_str),
+                "Quantidade": qtds_salvas.get(eid_str, 1),
+            })
         for tid in requisitos_salvos.get("treinamento_ids") or []:
             tid_str = str(tid)
-            resumo_linhas.append(
-                {
-                    "Categoria": "Treinamento",
-                    "Item": mapa_trein.get(tid_str, tid_str),
-                    "Quantidade": "-",
-                }
-            )
+            resumo_linhas.append({
+                "Categoria": "Treinamento",
+                "Item": mapa_trein.get(tid_str, tid_str),
+                "Quantidade": "-",
+            })
         for xid in requisitos_salvos.get("exame_ids") or []:
             xid_str = str(xid)
-            resumo_linhas.append(
-                {
-                    "Categoria": "Exame",
-                    "Item": mapa_exames.get(xid_str, xid_str),
-                    "Quantidade": "-",
-                }
-            )
+            resumo_linhas.append({
+                "Categoria": "Exame",
+                "Item": mapa_exames.get(xid_str, xid_str),
+                "Quantidade": "-",
+            })
 
         if resumo_linhas:
             st.markdown("##### Itens Atualmente Vinculados a Este Cargo no Banco")
