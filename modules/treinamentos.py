@@ -152,3 +152,72 @@ def render_treinamentos() -> None:
             with c1:
                 nome_treinamento = st.text_input(
                     "Nome / Tipo do Treinamento *",
+                    placeholder="Ex: NR-11 OPERAÇÃO DE EMPILHADEIRA",
+                )
+            with c2:
+                modalidade = st.selectbox(
+                    "Modalidade",
+                    options=["PRESENCIAL", "EAD / ONLINE", "HÍBRIDO", "PRÁTICO / OPERACIONAL"],
+                    index=0,
+                )
+            with c3:
+                validade_meses = st.number_input(
+                    "Validade Padrão (meses)",
+                    min_value=1,
+                    value=12,
+                    step=1,
+                )
+
+            c4, c5, c6 = st.columns(3)
+            with c4:
+                tipo_capacitacao = st.text_input(
+                    "Tipo de Capacitação",
+                    placeholder="Ex: FORMAÇÃO / RECICLAGEM",
+                )
+            with c5:
+                carga_horaria = st.number_input(
+                    "Carga Horária (horas)",
+                    min_value=1,
+                    value=8,
+                    step=1,
+                )
+            with c6:
+                status_trein = st.selectbox(
+                    "Status",
+                    options=["ATIVO", "INATIVO"],
+                    index=0,
+                )
+
+            if st.form_submit_button("💾 Salvar Treinamento"):
+                nome_limpo = nome_treinamento.strip().upper()
+                if not nome_limpo:
+                    st.warning("Informe o Nome / Tipo do Treinamento.")
+                else:
+                    try:
+                        hoje = date.today()
+                        data_venc_calculada = _somar_meses(hoje, int(validade_meses))
+                        payload = {
+                            "nome_treinamento": nome_limpo,
+                            "titulo": nome_limpo,
+                            "nome": nome_limpo,
+                            "modalidade": modalidade.strip().upper(),
+                            "validade_meses": int(validade_meses),
+                            "tipo_capacitacao": tipo_capacitacao.strip().upper(),
+                            "capacitacao": tipo_capacitacao.strip().upper(),
+                            "carga_horaria": int(carga_horaria),
+                            "status": status_trein.strip().upper(),
+                            "data_vencimento": str(data_venc_calculada),
+                            "validade": str(data_venc_calculada),
+                        }
+                        _inserir_treinamento_com_fallback(supabase, payload)
+                        st.session_state[CHAVE_MSG_TREINAMENTOS] = {
+                            "tipo": "success",
+                            "texto": f"Treinamento '{nome_limpo}' salvo com sucesso em MAIÚSCULO!",
+                        }
+                        _limpar_cache_treinamentos()
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Erro ao salvar treinamento no Supabase: {err}")
+
+
+render_treinamentos = render_treinamentos
