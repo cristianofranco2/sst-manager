@@ -128,7 +128,10 @@ def _inserir_epi_com_fallback(supabase, payload: dict):
     return supabase.table("epis").insert(dados).execute()
 
 
-def _localizar_epi_id_recem_criado(supabase, sku: str, ca: str, descricao: str) -> str | None:
+def _localizar_epi_id_recem_criado(
+    supabase, sku: str, ca: str, validade: date, descricao: str
+) -> str | None:
+    val_iso = validade.strftime("%Y-%m-%d")
     try:
         res = (
             supabase.table("epis")
@@ -140,7 +143,16 @@ def _localizar_epi_id_recem_criado(supabase, sku: str, ca: str, descricao: str) 
         linhas = res.data or []
         if linhas:
             for linha in reversed(linhas):
-                if str(linha.get("descricao") or "").strip() == descricao and linha.get("id") is not None:
+                val_linha = str(linha.get("data_validade_ca") or linha.get("validade_ca") or "")[:10]
+                if (
+                    val_linha == val_iso
+                    and str(linha.get("descricao") or "").strip() == descricao
+                    and linha.get("id") is not None
+                ):
+                    return str(linha["id"]).strip()
+            for linha in reversed(linhas):
+                val_linha = str(linha.get("data_validade_ca") or linha.get("validade_ca") or "")[:10]
+                if val_linha == val_iso and linha.get("id") is not None:
                     return str(linha["id"]).strip()
             if linhas[-1].get("id") is not None:
                 return str(linhas[-1]["id"]).strip()
@@ -150,9 +162,11 @@ def _localizar_epi_id_recem_criado(supabase, sku: str, ca: str, descricao: str) 
     try:
         res_all = supabase.table("epis").select("*").execute()
         for linha in reversed(res_all.data or []):
+            val_linha = str(linha.get("data_validade_ca") or linha.get("validade_ca") or "")[:10]
             if (
                 str(linha.get("codigo_sku") or "").strip() == sku
                 and str(linha.get("numero_ca") or "").strip() == ca
+                and val_linha == val_iso
                 and linha.get("id") is not None
             ):
                 return str(linha["id"]).strip()
@@ -343,6 +357,7 @@ def render_epis() -> None:
                                     supabase=supabase,
                                     sku=sku_limpo,
                                     ca=ca_limpo,
+                                    validade=validade_ca,
                                     descricao=desc_limpa,
                                 )
 
@@ -381,4 +396,13 @@ def render_epis() -> None:
                             _limpar_cache_epis()
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Erro ao salvar EPI no Supabase: {e}")
+                            msg_err = str(e)
+                            if "23505" in msg_err:
+                                st.error(
+                                    f"Já existe um registro com essa combinação de SKU '{sku_limpo}', "
+                                    f"CA '{ca_limpo}' e Validade '{validade_ca.strftime('%d/%m/%Y')}' "
+                                    f"(ou restrição única no banco). Se o erro citar 'epis_codigo_sku_key', "
+                                    f"rode o SQL para trocar a unicidade para (codigo_sku, numero_ca, data_validade_ca)."
+                                )
+                            else:
+                                st.error(f"Erro ao salvar EPI no Supabase: {e}")
