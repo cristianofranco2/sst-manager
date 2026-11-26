@@ -12,14 +12,14 @@ COLUNAS_OBRIGATORIAS_EPI = {"numero_ca"}
 CHAVE_MSG_EPI = "msg_feedback_cadastro_epi"
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def _buscar_epis() -> list[dict]:
     supabase = get_supabase()
     res = supabase.table("epis").select("*").execute()
     return res.data or []
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def _buscar_saldos_inventario() -> dict[str, int]:
     supabase = get_supabase()
     try:
@@ -36,8 +36,7 @@ def _buscar_saldos_inventario() -> dict[str, int]:
 
 
 def _limpar_cache_epis() -> None:
-    _buscar_epis.clear()
-    _buscar_saldos_inventario.clear()
+    st.cache_data.clear()
 
 
 def _formatar_data_br(valor) -> str:
@@ -62,7 +61,7 @@ def _extrair_id_inserido(res) -> str | None:
     if not res or not getattr(res, "data", None):
         return None
     primeiro = res.data[0]
-    if isinstance(primeiro, dict) and primeiro.get("id"):
+    if isinstance(primeiro, dict) and primeiro.get("id") is not None:
         return str(primeiro["id"]).strip()
     return None
 
@@ -94,6 +93,44 @@ def _inserir_epi_com_fallback(supabase, payload: dict):
                 continue
             raise
     return supabase.table("epis").insert(dados).execute()
+
+
+def _localizar_epi_id_recem_criado(supabase, sku: str, ca: str, descricao: str) -> str | None:
+    """
+    Localiza o ID do EPI recém-inserido mesmo quando o insert não retorna a linha
+    ou quando a tabela usa UUID em vez de ID numérico ordenável.
+    """
+    try:
+        res = (
+            supabase.table("epis")
+            .select("*")
+            .eq("codigo_sku", sku)
+            .eq("numero_ca", ca)
+            .execute()
+        )
+        linhas = res.data or []
+        if linhas:
+            for linha in reversed(linhas):
+                if str(linha.get("descricao") or "").strip() == descricao and linha.get("id") is not None:
+                    return str(linha["id"]).strip()
+            if linhas[-1].get("id") is not None:
+                return str(linhas[-1]["id"]).strip()
+    except Exception:
+        pass
+
+    try:
+        res_all = supabase.table("epis").select("*").execute()
+        for linha in reversed(res_all.data or []):
+            if (
+                str(linha.get("codigo_sku") or "").strip() == sku
+                and str(linha.get("numero_ca") or "").strip() == ca
+                and linha.get("id") is not None
+            ):
+                return str(linha["id"]).strip()
+    except Exception:
+        pass
+
+    return None
 
 
 def _inserir_entrada_inicial_inventario(
@@ -262,16 +299,12 @@ def render_epis() -> None:
                         epi_id = _extrair_id_inserido(res_epi)
 
                         if not epi_id:
-                            busca = (
-                                supabase.table("epis")
-                                .select("id")
-                                .eq("codigo_sku", sku_limpo)
-                                .eq("numero_ca", ca_limpo)
-                                .order("id", desc=True)
-                                .limit(1)
-                                .execute()
+                            epi_id = _localizar_epi_id_recem_criado(
+                                supabase=supabase,
+                                sku=sku_limpo,
+                                ca=ca_limpo,
+                                descricao=desc_limpa,
                             )
-                            epi_id = _extrair_id_inserido(busca)
 
                         if int(qtd_inicial) > 0:
                             if epi_id:
