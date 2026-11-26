@@ -8,9 +8,10 @@ from modules.matriz_funcao import render_matriz_funcao, render_voltar_matriz_se_
 from modules.relatorio_colaborador import render_relatorio_colaborador
 from modules.tipos_exames import render_tipos_exames
 from modules.treinamentos import render_treinamentos
+from ui_components import render_logo_sidebar
 
 st.set_page_config(
-    page_title="Gestor SST - Globex",
+    page_title="Gestor SST - Globex Multimodal",
     page_icon="🛡️",
     layout="wide",
 )
@@ -31,7 +32,6 @@ def main() -> None:
     if "menu_selecionado" not in st.session_state:
         st.session_state["menu_selecionado"] = OPCOES_MENU[0]
 
-    # Aplica navegação pendente ANTES de instanciar o widget st.radio
     if "menu_pendente" in st.session_state and st.session_state["menu_pendente"]:
         destino = st.session_state.pop("menu_pendente")
         if destino in OPCOES_MENU:
@@ -41,8 +41,7 @@ def main() -> None:
     if "radio_menu_SST" not in st.session_state:
         st.session_state["radio_menu_SST"] = st.session_state["menu_selecionado"]
 
-    st.sidebar.title("🛡️ Gestor SST")
-    st.sidebar.markdown("---")
+    render_logo_sidebar()
 
     menu = st.sidebar.radio(
         "Selecione o Módulo",
@@ -50,9 +49,6 @@ def main() -> None:
         key="radio_menu_SST",
     )
     st.session_state["menu_selecionado"] = menu
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("Sistema Integrado SST • Streamlit + Supabase")
 
     if menu == "📄 Relatório por Colaborador":
         render_relatorio_colaborador()
