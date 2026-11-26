@@ -88,19 +88,19 @@ def render_voltar_matriz_se_necessario() -> None:
         col_aviso, col_btn = st.columns([3, 1])
         with col_aviso:
             st.info(
-                "Você abriu este cadastro a partir da **Matriz por Função**. "
+                "Você abriu este cadastro a partir do **Agrupamento por Cargo**. "
                 "Seu rascunho está preservado."
             )
         with col_btn:
-            if st.button("↩️ Voltar para a Matriz", key="btn_voltar_matriz", use_container_width=True):
+            if st.button("↩️ Voltar para o Agrupamento", key="btn_voltar_matriz", use_container_width=True):
                 st.session_state["origem_matriz"] = False
                 _limpar_cache_matriz()
-                st.session_state["menu_pendente"] = "🧩 Matriz por Função"
+                st.session_state["menu_pendente"] = "🧩 Agrupamento por Cargo"
                 st.rerun()
 
 
 def render_matriz_funcao() -> None:
-    st.title("🧩 Matriz SST por Função (EPIs, Treinamentos e Exames)")
+    st.title("🧩 Agrupamento por Cargo (EPIs, Treinamentos e Exames)")
 
     try:
         supabase = get_supabase()
@@ -118,9 +118,9 @@ def render_matriz_funcao() -> None:
 
     funcoes = _buscar_funcoes()
     if not funcoes:
-        st.warning("Nenhuma função cadastrada ainda. Cadastre uma função no módulo **Funções** para começar.")
-        if st.button("➕ Ir para Cadastro de Funções", key="btn_ir_funcoes"):
-            _ir_para_modulo("💼 Funções")
+        st.warning("Nenhum cargo cadastrado ainda. Cadastre um cargo no **Cadastro de Cargos** para começar.")
+        if st.button("➕ Ir para Cadastro de Cargos", key="btn_ir_funcoes"):
+            _ir_para_modulo("💼 Cadastro de Cargos")
             st.rerun()
         return
 
@@ -138,7 +138,7 @@ def render_matriz_funcao() -> None:
         return f"{nome} ({' • '.join(extra)})" if extra else nome
 
     funcao_selecionada = st.selectbox(
-        "1. Selecione a Função *",
+        "1. Selecione o Cargo / Função *",
         options=ids_funcoes,
         index=ids_funcoes.index(funcao_atual),
         format_func=_format_funcao,
@@ -172,10 +172,10 @@ def render_matriz_funcao() -> None:
     # BLOCO 1: EPIs + QUANTIDADE (- / +)
     b1_esq, b1_dir = st.columns([4, 1])
     with b1_esq:
-        st.subheader("🥽 2. EPIs da Função e Quantidade")
+        st.subheader("🥽 2. EPIs do Cargo e Quantidade")
     with b1_dir:
         if st.button("➕ Cadastrar EPI", key="btn_add_epi_matriz", use_container_width=True):
-            _ir_para_modulo("🥽 Catálogo de EPIs")
+            _ir_para_modulo("🥽 Cadastro de EPIs")
             st.rerun()
 
     epi_ids_selecionados = set(state["epi_ids"])
@@ -231,10 +231,10 @@ def render_matriz_funcao() -> None:
     # BLOCO 2: TREINAMENTOS
     b2_esq, b2_dir = st.columns([4, 1])
     with b2_esq:
-        st.subheader("🎓 3. Treinamentos da Função")
+        st.subheader("🎓 3. Treinamentos do Cargo")
     with b2_dir:
         if st.button("➕ Cadastrar Treinamento", key="btn_add_trein_matriz", use_container_width=True):
-            _ir_para_modulo("🎓 Treinamentos")
+            _ir_para_modulo("🎓 Cadastro de Treinamentos")
             st.rerun()
 
     trein_ids_selecionados = set(state["treinamento_ids"])
@@ -269,10 +269,10 @@ def render_matriz_funcao() -> None:
     # BLOCO 3: EXAMES
     b3_esq, b3_dir = st.columns([4, 1])
     with b3_esq:
-        st.subheader("📋 4. Exames da Função")
+        st.subheader("📋 4. Exames do Cargo")
     with b3_dir:
         if st.button("➕ Cadastrar Exame", key="btn_add_exame_matriz", use_container_width=True):
-            _ir_para_modulo("📋 Catálogo de Tipos de Exames")
+            _ir_para_modulo("📋 Cadastro de Exames")
             st.rerun()
 
     exame_ids_selecionados = set(state["exame_ids"])
@@ -305,13 +305,13 @@ def render_matriz_funcao() -> None:
     st.markdown("---")
 
     # RESUMO E SALVAMENTO
-    st.subheader("💾 Salvar Matriz da Função")
+    st.subheader("💾 Salvar Agrupamento do Cargo")
     m1, m2, m3 = st.columns(3)
     m1.metric("EPIs Selecionados", len(state["epi_ids"]))
     m2.metric("Treinamentos Selecionados", len(state["treinamento_ids"]))
     m3.metric("Exames Selecionados", len(state["exame_ids"]))
 
-    if st.button("💾 Salvar Requisitos da Função", type="primary", key="btn_salvar_matriz"):
+    if st.button("💾 Salvar Requisitos do Cargo", type="primary", key="btn_salvar_matriz"):
         try:
             payload = {
                 "funcao_id": funcao_selecionada,
@@ -322,9 +322,9 @@ def render_matriz_funcao() -> None:
             }
             supabase.table("funcao_requisitos").upsert(payload, on_conflict="funcao_id").execute()
             _buscar_requisito_funcao.clear()
-            st.success("Requisitos da função salvos com sucesso!")
+            st.success("Requisitos do cargo salvos com sucesso!")
         except Exception as e:
-            st.error(f"Erro ao salvar matriz da função: {e}")
+            st.error(f"Erro ao salvar agrupamento do cargo: {e}")
 
     # TABELA CONSOLIDADA
     requisitos_salvos = _buscar_requisito_funcao(funcao_selecionada)
@@ -349,33 +349,4 @@ def render_matriz_funcao() -> None:
         resumo_linhas = []
         for eid in requisitos_salvos.get("epi_ids") or []:
             eid_str = str(eid)
-            qtd_item = qtds_salvas.get(eid_str, 1)
-            resumo_linhas.append(
-                {
-                    "Categoria": "EPI",
-                    "Item": mapa_epis.get(eid_str, eid_str),
-                    "Quantidade": qtd_item,
-                }
-            )
-        for tid in requisitos_salvos.get("treinamento_ids") or []:
-            tid_str = str(tid)
-            resumo_linhas.append(
-                {
-                    "Categoria": "Treinamento",
-                    "Item": mapa_trein.get(tid_str, tid_str),
-                    "Quantidade": "-",
-                }
-            )
-        for xid in requisitos_salvos.get("exame_ids") or []:
-            xid_str = str(xid)
-            resumo_linhas.append(
-                {
-                    "Categoria": "Exame",
-                    "Item": mapa_exames.get(xid_str, xid_str),
-                    "Quantidade": "-",
-                }
-            )
-
-        if resumo_linhas:
-            st.markdown("##### Itens Atualmente Vinculados a Esta Função no Banco")
-            st.dataframe(pd.DataFrame(resumo_linhas), use_container_width=True, hide_index=True)
+            qtd_item = qtds_salvas.get(eid
