@@ -1,3 +1,4 @@
+from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
@@ -25,6 +26,24 @@ def _buscar_funcoes_ativas() -> list[dict]:
         return [f for f in dados if f.get("ativo", True)]
     except Exception:
         return []
+
+
+def _formatar_data_br(valor) -> str:
+    if not valor:
+        return "—"
+    if isinstance(valor, datetime):
+        return valor.strftime("%d/%m/%Y")
+    if isinstance(valor, date):
+        return valor.strftime("%d/%m/%Y")
+    texto = str(valor).strip()[:10]
+    if not texto:
+        return "—"
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(texto, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return texto
 
 
 def render_colaboradores() -> None:
@@ -58,6 +77,10 @@ def render_colaboradores() -> None:
             data = _buscar_colaboradores()
             if data:
                 df = pd.DataFrame(data)
+                for col_data in ["data_nascimento", "data_admissao"]:
+                    if col_data in df.columns:
+                        df[col_data] = df[col_data].map(_formatar_data_br)
+
                 colunas_desejadas = [
                     "matricula",
                     "nome_completo",
@@ -92,7 +115,7 @@ def render_colaboradores() -> None:
                         "status": "Status",
                     }
                 )
-                st.dataframe(df_exibir, use_container_width=True)
+                st.dataframe(df_exibir, use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhum colaborador encontrado no banco de dados.")
         except Exception as e:
@@ -132,7 +155,7 @@ def render_colaboradores() -> None:
                 cpf = st.text_input("CPF * (somente números)")
                 rg_numero = st.text_input("RG")
             with c3:
-                data_nascimento = st.date_input("Data de Nascimento")
+                data_nascimento = st.date_input("Data de Nascimento", format="DD/MM/YYYY")
                 genero = st.selectbox("Gênero", ["Masculino", "Feminino", "Outro", "Não informado"])
 
             st.markdown("---")
@@ -151,7 +174,7 @@ def render_colaboradores() -> None:
                     "Tipo de Contrato", ["CLT", "PJ", "Estágio", "Temporário", "Terceirizado"]
                 )
             with c6:
-                data_admissao = st.date_input("Data de Admissão")
+                data_admissao = st.date_input("Data de Admissão", format="DD/MM/YYYY")
                 status = st.selectbox("Status Inicial", ["Ativo", "Afastado", "Férias", "Desligado"])
 
             superior_imediato = st.text_input("Gestor Direto / Superior Imediato")
