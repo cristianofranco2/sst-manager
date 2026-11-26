@@ -1,8 +1,7 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import ast
 import json
 import re
-import pandas as pd
 import streamlit as st
 
 from database import get_supabase
@@ -245,6 +244,7 @@ def _resolver_itens_catalogo(
     refs_qtd: dict[str, int | None],
     catalogo: list[dict],
     campos_rotulo: tuple[str, ...],
+    manter_nao_encontrados: bool = False,
 ) -> list[dict]:
     if not refs_qtd:
         return []
@@ -262,16 +262,20 @@ def _resolver_itens_catalogo(
 
     for ref, qtd in refs_qtd.items():
         item_cat = mapa_id.get(ref) or mapa_rotulo.get(_normalizar(ref))
-        if not item_cat:
-            continue
-        item_id = str(item_cat.get("id") or _normalizar(ref)).strip()
-        if item_id in vistos:
-            continue
-        vistos.add(item_id)
-        combinado = dict(item_cat)
-        if qtd is not None:
-            combinado["_qtd_requisito"] = qtd
-        resolvidos.append(combinado)
+        if item_cat:
+            item_id = str(item_cat.get("id") or _normalizar(ref)).strip()
+            if item_id in vistos:
+                continue
+            vistos.add(item_id)
+            combinado = dict(item_cat)
+            if qtd is not None:
+                combinado["_qtd_requisito"] = qtd
+            resolvidos.append(combinado)
+        elif manter_nao_encontrados:
+            chave = _normalizar(ref)
+            if chave and chave not in vistos:
+                vistos.add(chave)
+                resolvidos.append({"nome": ref, "descricao": ref, "_qtd_requisito": qtd})
 
     return resolvidos
 
@@ -290,58 +294,6 @@ def _nome_treinamento(reg: dict) -> str:
         if v:
             return v
     return "—"
-
-
-def _montar_df_dinamico_exames(linhas_exames: list[dict]) -> pd.DataFrame:
-    if not linhas_exames:
-        return pd.DataFrame()
-
-    candidatos_colunas = [
-        ("Exame", ("Exame",)),
-        ("Tipo / Categoria", ("tipo", "categoria", "tipo_exame", "descricao")),
-        ("Periodicidade (meses)", ("periodicidade_meses", "validade_meses", "periodicidade", "validade_dias")),
-        ("Data Realização", ("data_realizacao", "data_exame", "data_aso", "created_at")),
-        ("Vencimento", ("data_vencimento", "proximo_vencimento", "validade")),
-        ("Status", ("status", "resultado", "situacao")),
-        ("Observações", ("observacoes", "obs")),
-    ]
-
-    df_out = pd.DataFrame()
-    for rotulo, chaves in candidatos_colunas:
-        valores = []
-        tem_dado_real = False
-        for row in linhas_exames:
-            if rotulo == "Exame":
-                val = row.get("Exame") or _nome_exame(row)
-                if val and val != "—":
-                    tem_dado_real = True
-                valores.append(val)
-                continue
-
-            achado = None
-            for k in chaves:
-                if k in row and row[k] not in (None, ""):
-                    achado = row[k]
-                    break
-
-            if achado is None:
-                valores.append("—")
-            else:
-                if "Data" in rotulo or "Vencimento" in rotulo:
-                    fmt = _formatar_data_br(achado)
-                    if fmt != "—":
-                        tem_dado_real = True
-                    valores.append(fmt)
-                else:
-                    txt = str(achado).strip()
-                    if txt:
-                        tem_dado_real = True
-                    valores.append(txt if txt else "—")
-
-        if rotulo in ("Exame", "Periodicidade (meses)", "Vencimento", "Status") or tem_dado_real:
-            df_out[rotulo] = valores
-
-    return df_out
 
 
 def render_relatorio_colaborador() -> None:
@@ -423,10 +375,9 @@ def render_relatorio_colaborador() -> None:
 
     req_funcao = _obter_requisito_funcao(funcao_requisitos, funcao_id, nome_funcao)
     refs_epi = _coletar_refs_por_palavra_chave(req_funcao, ("epi",))
-    refs_exame = _coletar_refs_por_palavra_chave(req_funcao, ("exame",))
-    refs_trein = _coletar_refs_por_palavra_chave(req_funcao, ("trein",))
+    refs_exame = _coletar_refs_por_palavra_chave(req_funcao, ("exame", "aso"))
+    refs_trein = _coletar_refs_por_palavra_chave(req_funcao, ("trein", "curso", "nr"))
 
-    mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id") is not None}
     mapa_tipos_ex = {str(tx.get("id") or "").strip(): tx for tx in tipos_exames if tx.get("id") is not None}
 
     tab1, tab2, tab3 = st.tabs([
@@ -442,107 +393,4 @@ def render_relatorio_colaborador() -> None:
             refs_epi, epis, ("descricao", "nome_epi", "codigo_sku", "numero_ca")
         )
         if epis_req:
-            linhas_epi = []
-            for e in epis_req:
-                linha = {
-                    "SKU": str(e.get("codigo_sku") or e.get("sku") or "—"),
-                    "EPI": str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "—"),
-                    "Nº CA": str(e.get("numero_ca") or e.get("ca") or "—"),
-                    "Validade CA": _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca")),
-                }
-                if "_qtd_requisito" in e and e["_qtd_requisito"] is not None:
-                    linha["Qtd. Agrupamento"] = e["_qtd_requisito"]
-                linhas_epi.append(linha)
-            st.dataframe(pd.DataFrame(linhas_epi), use_container_width=True, hide_index=True)
-
-            with st.expander("🔄 Registrar Troca / Entrega de EPI"):
-                opcoes_epi_ids = [str(e.get("id") or "").strip() for e in epis_req if e.get("id") is not None]
-                if opcoes_epi_ids:
-                    with st.form("form_troca_epi_relatorio"):
-                        t1, t2, t3 = st.columns(3)
-                        with t1:
-                            epi_troca_id = st.selectbox(
-                                "EPI",
-                                options=opcoes_epi_ids,
-                                format_func=lambda eid: (
-                                    f"{mapa_epis.get(eid, {}).get('descricao') or mapa_epis.get(eid, {}).get('nome_epi') or 'EPI'} "
-                                    f"(CA {mapa_epis.get(eid, {}).get('numero_ca') or '—'})"
-                                ),
-                            )
-                        with t2:
-                            qtd_troca = st.number_input("Quantidade", min_value=1, value=1, step=1)
-                        with t3:
-                            data_troca = st.date_input("Data da Troca", value=date.today(), format="DD/MM/YYYY")
-
-                        motivo_troca = st.text_input("Motivo / Observação", placeholder="Ex: Desgaste natural / troca periódica")
-                        sub_troca = st.form_submit_button("✅ Confirmar Troca de EPI")
-
-                        if sub_troca:
-                            try:
-                                # Tenta localizar lote disponível para inventario_id se existir
-                                lote_id = None
-                                qtd_disp_lote = 0
-                                for inv in inventario:
-                                    if str(inv.get("epi_id") or "").strip() == epi_troca_id:
-                                        disp = int(inv.get("quantidade_disponivel") or 0)
-                                        if disp >= int(qtd_troca) and inv.get("id") is not None:
-                                            lote_id = inv["id"]
-                                            qtd_disp_lote = disp
-                                            break
-
-                                payload_troca = {
-                                    "colaborador_id": colab_sel_id,
-                                    "epi_id": epi_troca_id,
-                                    "inventario_id": lote_id,
-                                    "quantidade": int(qtd_troca),
-                                    "data_troca": str(data_troca),
-                                    "data_entrega": str(data_troca),
-                                    "motivo": motivo_troca.strip(),
-                                    "observacoes": motivo_troca.strip(),
-                                }
-                                _executar_insert_fallback(
-                                    supabase,
-                                    "historico_trocas_epi",
-                                    payload_troca,
-                                    obrigatorias={"colaborador_id", "epi_id", "quantidade"},
-                                )
-
-                                if lote_id is not None:
-                                    novo_saldo = max(0, qtd_disp_lote - int(qtd_troca))
-                                    try:
-                                        supabase.table("inventario_epi").update(
-                                            {"quantidade_disponivel": novo_saldo}
-                                        ).eq("id", lote_id).execute()
-                                    except Exception:
-                                        pass
-
-                                st.session_state["msg_relatorio_colab"] = {
-                                    "tipo": "success",
-                                    "texto": f"Troca de {int(qtd_troca)} un. registrada para {nome_colab}!",
-                                }
-                                _limpar_cache()
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao registrar troca de EPI: {e}")
-        else:
-            st.info("Nenhum EPI vinculado à função deste colaborador.")
-
-        # ---------------- EXAMES ----------------
-        st.subheader("📋 Exames")
-        exames_req = _resolver_itens_catalogo(
-            refs_exame, tipos_exames, ("nome", "nome_exame", "tipo_exame", "descricao")
-        )
-        exames_do_colab = [
-            ex for ex in exames_colab if str(ex.get("colaborador_id") or "").strip() == colab_sel_id
-        ]
-
-        linhas_exames_exibir: list[dict] = []
-        for ex in exames_do_colab:
-            tx_id = str(ex.get("tipo_exame_id") or ex.get("exame_id") or "").strip()
-            tx_info = mapa_tipos_ex.get(tx_id, {})
-            combinado = {**tx_info, **ex}
-            combinado["Exame"] = _nome_exame(combinado)
-            linhas_exames_exibir.append(combinado)
-
-        for tx in exames_req:
-            tx_id = str(tx.get("id") or "").strip()
+            for idx
