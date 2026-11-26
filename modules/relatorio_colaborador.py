@@ -1,6 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import ast
 import json
+import re
 import pandas as pd
 import streamlit as st
 
@@ -16,6 +17,10 @@ def _buscar_tabela(nome_tabela: str) -> list[dict]:
         return res.data or []
     except Exception:
         return []
+
+
+def _limpar_cache() -> None:
+    st.cache_data.clear()
 
 
 def _normalizar(valor) -> str:
@@ -45,6 +50,43 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
+def _somar_meses(data_base: date, meses: int) -> date:
+    meses = max(1, int(meses))
+    ano = data_base.year + (data_base.month - 1 + meses) // 12
+    mes = (data_base.month - 1 + meses) % 12 + 1
+    ultimos_dias = [
+        31,
+        29 if (ano % 4 == 0 and (ano % 100 != 0 or ano % 400 == 0)) else 28,
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ]
+    dia = min(data_base.day, ultimos_dias[mes - 1])
+    return date(ano, mes, dia)
+
+
+def _extrair_coluna_pgrst204(msg: str) -> str | None:
+    match = re.search(r"Could not find the '([^']+)' column", msg)
+    if match:
+        return match.group(1).strip()
+    match_alt = re.search(r"column ['\"]([^'\"]+)['\"]", msg)
+    if match_alt:
+        return match_alt.group(1).strip()
+    return None
+
+
+def _executar_insert_fallback(supabase, tabela: str, payload: dict, obrigatorias: set[str]):
+    dados = dict(payload)
+    for _ in range(15):
+        try:
+            return supabase.table(tabela).insert(dados).execute()
+        except Exception as e:
+            col = _extrair_coluna_pgrst204(str(e))
+            if col and col in dados and col not in obrigatorias:
+                dados.pop(col)
+                continue
+            raise
+    return supabase.table(tabela).insert(dados).execute()
+
+
 def _converter_para_estrutura(valor):
     if isinstance(valor, (dict, list)):
         return valor
@@ -61,16 +103,9 @@ def _converter_para_estrutura(valor):
     return valor
 
 
-def _extrair_mapa_referencias_e_qtds(valor) -> dict[str, int | None]:
-    """
-    Extrai {referencia_ou_id: quantidade_opcional} a partir de:
-    - dict/JSON: {"uuid_epi": 1, ...}
-    - list/JSON: ["uuid_epi", ...] ou [{"id": "uuid_epi", "quantidade": 1}, ...]
-    - str separada por vírgula: "id1,id2"
-    """
+def _extrair_mapa_referencias(valor) -> dict[str, int | None]:
     estrutura = _converter_para_estrutura(valor)
     resultado: dict[str, int | None] = {}
-
     if estrutura is None:
         return resultado
 
@@ -124,7 +159,6 @@ def _extrair_mapa_referencias_e_qtds(valor) -> dict[str, int | None]:
     texto = str(estrutura).strip()
     if not texto:
         return resultado
-
     if "," in texto:
         for parte in texto.split(","):
             limpo = parte.strip().strip("'\"")
@@ -196,14 +230,12 @@ def _coletar_refs_por_palavra_chave(req_funcao: dict | None, palavras: tuple[str
     coletado: dict[str, int | None] = {}
     if not req_funcao:
         return coletado
-
     for col, val in req_funcao.items():
         col_norm = _normalizar(col)
         if col_norm in ("id", "funcao_id", "cargo_id", "created_at", "updated_at"):
             continue
         if any(p in col_norm for p in palavras):
-            mapa_parcial = _extrair_mapa_referencias_e_qtds(val)
-            for ref, qtd in mapa_parcial.items():
+            for ref, qtd in _extrair_mapa_referencias(val).items():
                 if ref not in coletado or coletado[ref] is None:
                     coletado[ref] = qtd
     return coletado
@@ -225,36 +257,114 @@ def _resolver_itens_catalogo(
             if val_norm:
                 mapa_rotulo[val_norm] = item
 
-    itens_resolvidos: list[dict] = []
+    resolvidos: list[dict] = []
     vistos: set[str] = set()
 
     for ref, qtd in refs_qtd.items():
         item_cat = mapa_id.get(ref) or mapa_rotulo.get(_normalizar(ref))
         if not item_cat:
-            # Ignora chaves não encontradas no catálogo para não gerar linhas vazias/corrompidas
             continue
-
         item_id = str(item_cat.get("id") or _normalizar(ref)).strip()
         if item_id in vistos:
             continue
         vistos.add(item_id)
-
         combinado = dict(item_cat)
         if qtd is not None:
             combinado["_qtd_requisito"] = qtd
-        itens_resolvidos.append(combinado)
+        resolvidos.append(combinado)
 
-    return itens_resolvidos
+    return resolvidos
+
+
+def _nome_exame(reg: dict) -> str:
+    for c in ("nome", "nome_exame", "tipo_exame", "titulo", "descricao"):
+        v = str(reg.get(c) or "").strip()
+        if v:
+            return v
+    return "—"
+
+
+def _nome_treinamento(reg: dict) -> str:
+    for c in ("nome", "nome_treinamento", "titulo", "curso", "descricao"):
+        v = str(reg.get(c) or "").strip()
+        if v:
+            return v
+    return "—"
+
+
+def _montar_df_dinamico_exames(linhas_exames: list[dict]) -> pd.DataFrame:
+    if not linhas_exames:
+        return pd.DataFrame()
+
+    candidatos_colunas = [
+        ("Exame", ("Exame",)),
+        ("Tipo / Categoria", ("tipo", "categoria", "tipo_exame", "descricao")),
+        ("Periodicidade (meses)", ("periodicidade_meses", "validade_meses", "periodicidade", "validade_dias")),
+        ("Data Realização", ("data_realizacao", "data_exame", "data_aso", "created_at")),
+        ("Vencimento", ("data_vencimento", "proximo_vencimento", "validade")),
+        ("Status", ("status", "resultado", "situacao")),
+        ("Observações", ("observacoes", "obs")),
+    ]
+
+    df_out = pd.DataFrame()
+    for rotulo, chaves in candidatos_colunas:
+        valores = []
+        tem_dado_real = False
+        for row in linhas_exames:
+            if rotulo == "Exame":
+                val = row.get("Exame") or _nome_exame(row)
+                if val and val != "—":
+                    tem_dado_real = True
+                valores.append(val)
+                continue
+
+            achado = None
+            for k in chaves:
+                if k in row and row[k] not in (None, ""):
+                    achado = row[k]
+                    break
+
+            if achado is None:
+                valores.append("—")
+            else:
+                if "Data" in rotulo or "Vencimento" in rotulo:
+                    fmt = _formatar_data_br(achado)
+                    if fmt != "—":
+                        tem_dado_real = True
+                    valores.append(fmt)
+                else:
+                    txt = str(achado).strip()
+                    if txt:
+                        tem_dado_real = True
+                    valores.append(txt if txt else "—")
+
+        if rotulo in ("Exame", "Periodicidade (meses)", "Vencimento", "Status") or tem_dado_real:
+            df_out[rotulo] = valores
+
+    return df_out
 
 
 def render_relatorio_colaborador() -> None:
     render_cabecalho_modulo("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
+    if "msg_relatorio_colab" in st.session_state:
+        msg = st.session_state.pop("msg_relatorio_colab")
+        if msg.get("tipo") == "warning":
+            st.warning(msg.get("texto", ""))
+        else:
+            st.success(msg.get("texto", ""))
+
     col_f, col_btn = st.columns([5, 1])
     with col_btn:
         if st.button("🔄 Atualizar", key="btn_att_relatorio_colab", use_container_width=True):
-            st.cache_data.clear()
+            _limpar_cache()
             st.rerun()
+
+    try:
+        supabase = get_supabase()
+    except Exception as e:
+        st.error(f"Erro ao conectar com o Supabase: {e}")
+        return
 
     colaboradores = _buscar_tabela("colaboradores")
     if not colaboradores:
@@ -264,6 +374,7 @@ def render_relatorio_colaborador() -> None:
     funcoes = _buscar_tabela("funcoes")
     funcao_requisitos = _buscar_tabela("funcao_requisitos")
     epis = _buscar_tabela("epis")
+    inventario = _buscar_tabela("inventario_epi")
     tipos_exames = _buscar_tabela("tipos_exames")
     exames_colab = _buscar_tabela("exames_colaborador")
     treinamentos = _buscar_tabela("treinamentos")
@@ -292,7 +403,12 @@ def render_relatorio_colaborador() -> None:
     colab_atual = mapa_colabs.get(colab_sel_id, {})
     funcao_id, nome_funcao = _resolver_funcao_colaborador(colab_atual, funcoes)
     matricula = str(colab_atual.get("matricula") or "—").strip()
-    setor = str(colab_atual.get("setor") or colab_atual.get("centro_custo") or colab_atual.get("departamento") or "—").strip()
+    setor = str(
+        colab_atual.get("setor")
+        or colab_atual.get("centro_custo")
+        or colab_atual.get("departamento")
+        or "—"
+    ).strip()
     status = str(colab_atual.get("status") or "Ativo").strip()
     nome_colab = str(colab_atual.get("nome_completo") or colab_atual.get("nome") or "—").strip()
 
@@ -301,13 +417,17 @@ def render_relatorio_colaborador() -> None:
     c2.markdown(f"**Função:**\n\n{nome_funcao}")
     c3.markdown(f"**Matrícula:**\n\n{matricula}")
     c4.markdown(f"**Setor:**\n\n{setor}")
-    c5.markdown(f"**Status:**\n\n🟢 {status}" if _normalizar(status) == "ativo" else f"**Status:**\n\n{status}")
+    c5.markdown(
+        f"**Status:**\n\n🟢 {status}" if _normalizar(status) == "ativo" else f"**Status:**\n\n{status}"
+    )
 
     req_funcao = _obter_requisito_funcao(funcao_requisitos, funcao_id, nome_funcao)
-
     refs_epi = _coletar_refs_por_palavra_chave(req_funcao, ("epi",))
     refs_exame = _coletar_refs_por_palavra_chave(req_funcao, ("exame",))
     refs_trein = _coletar_refs_por_palavra_chave(req_funcao, ("trein",))
+
+    mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id") is not None}
+    mapa_tipos_ex = {str(tx.get("id") or "").strip(): tx for tx in tipos_exames if tx.get("id") is not None}
 
     tab1, tab2, tab3 = st.tabs([
         "👤 Visão por Colaborador",
@@ -316,6 +436,7 @@ def render_relatorio_colaborador() -> None:
     ])
 
     with tab1:
+        # ---------------- EPIs ----------------
         st.subheader("🥽 EPIs")
         epis_req = _resolver_itens_catalogo(
             refs_epi, epis, ("descricao", "nome_epi", "codigo_sku", "numero_ca")
@@ -333,97 +454,95 @@ def render_relatorio_colaborador() -> None:
                     linha["Qtd. Agrupamento"] = e["_qtd_requisito"]
                 linhas_epi.append(linha)
             st.dataframe(pd.DataFrame(linhas_epi), use_container_width=True, hide_index=True)
+
+            with st.expander("🔄 Registrar Troca / Entrega de EPI"):
+                opcoes_epi_ids = [str(e.get("id") or "").strip() for e in epis_req if e.get("id") is not None]
+                if opcoes_epi_ids:
+                    with st.form("form_troca_epi_relatorio"):
+                        t1, t2, t3 = st.columns(3)
+                        with t1:
+                            epi_troca_id = st.selectbox(
+                                "EPI",
+                                options=opcoes_epi_ids,
+                                format_func=lambda eid: (
+                                    f"{mapa_epis.get(eid, {}).get('descricao') or mapa_epis.get(eid, {}).get('nome_epi') or 'EPI'} "
+                                    f"(CA {mapa_epis.get(eid, {}).get('numero_ca') or '—'})"
+                                ),
+                            )
+                        with t2:
+                            qtd_troca = st.number_input("Quantidade", min_value=1, value=1, step=1)
+                        with t3:
+                            data_troca = st.date_input("Data da Troca", value=date.today(), format="DD/MM/YYYY")
+
+                        motivo_troca = st.text_input("Motivo / Observação", placeholder="Ex: Desgaste natural / troca periódica")
+                        sub_troca = st.form_submit_button("✅ Confirmar Troca de EPI")
+
+                        if sub_troca:
+                            try:
+                                # Tenta localizar lote disponível para inventario_id se existir
+                                lote_id = None
+                                qtd_disp_lote = 0
+                                for inv in inventario:
+                                    if str(inv.get("epi_id") or "").strip() == epi_troca_id:
+                                        disp = int(inv.get("quantidade_disponivel") or 0)
+                                        if disp >= int(qtd_troca) and inv.get("id") is not None:
+                                            lote_id = inv["id"]
+                                            qtd_disp_lote = disp
+                                            break
+
+                                payload_troca = {
+                                    "colaborador_id": colab_sel_id,
+                                    "epi_id": epi_troca_id,
+                                    "inventario_id": lote_id,
+                                    "quantidade": int(qtd_troca),
+                                    "data_troca": str(data_troca),
+                                    "data_entrega": str(data_troca),
+                                    "motivo": motivo_troca.strip(),
+                                    "observacoes": motivo_troca.strip(),
+                                }
+                                _executar_insert_fallback(
+                                    supabase,
+                                    "historico_trocas_epi",
+                                    payload_troca,
+                                    obrigatorias={"colaborador_id", "epi_id", "quantidade"},
+                                )
+
+                                if lote_id is not None:
+                                    novo_saldo = max(0, qtd_disp_lote - int(qtd_troca))
+                                    try:
+                                        supabase.table("inventario_epi").update(
+                                            {"quantidade_disponivel": novo_saldo}
+                                        ).eq("id", lote_id).execute()
+                                    except Exception:
+                                        pass
+
+                                st.session_state["msg_relatorio_colab"] = {
+                                    "tipo": "success",
+                                    "texto": f"Troca de {int(qtd_troca)} un. registrada para {nome_colab}!",
+                                }
+                                _limpar_cache()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao registrar troca de EPI: {e}")
         else:
             st.info("Nenhum EPI vinculado à função deste colaborador.")
 
+        # ---------------- EXAMES ----------------
         st.subheader("📋 Exames")
         exames_req = _resolver_itens_catalogo(
-            refs_exame, tipos_exames, ("nome", "descricao", "tipo_exame")
+            refs_exame, tipos_exames, ("nome", "nome_exame", "tipo_exame", "descricao")
         )
         exames_do_colab = [
             ex for ex in exames_colab if str(ex.get("colaborador_id") or "").strip() == colab_sel_id
         ]
-        mapa_tipos_ex = {str(tx.get("id") or "").strip(): tx for tx in tipos_exames if tx.get("id") is not None}
 
-        if exames_do_colab:
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "Exame": str(
-                            (mapa_tipos_ex.get(str(ex.get("tipo_exame_id") or "").strip()) or {}).get("nome")
-                            or (mapa_tipos_ex.get(str(ex.get("tipo_exame_id") or "").strip()) or {}).get("descricao")
-                            or ex.get("nome")
-                            or "—"
-                        ),
-                        "Vencimento": _formatar_data_br(ex.get("data_vencimento") or ex.get("validade")),
-                        "Status": str(ex.get("status") or "—"),
-                    }
-                    for ex in exames_do_colab
-                ]),
-                use_container_width=True,
-                hide_index=True,
-            )
-        elif exames_req:
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "Exame": str(tx.get("nome") or tx.get("descricao") or "—"),
-                        "Periodicidade": str(
-                            tx.get("periodicidade_meses")
-                            or tx.get("validade_meses")
-                            or tx.get("periodicidade")
-                            or "—"
-                        ),
-                    }
-                    for tx in exames_req
-                ]),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("Nenhum exame vinculado à função deste colaborador.")
+        linhas_exames_exibir: list[dict] = []
+        for ex in exames_do_colab:
+            tx_id = str(ex.get("tipo_exame_id") or ex.get("exame_id") or "").strip()
+            tx_info = mapa_tipos_ex.get(tx_id, {})
+            combinado = {**tx_info, **ex}
+            combinado["Exame"] = _nome_exame(combinado)
+            linhas_exames_exibir.append(combinado)
 
-        st.subheader("🎓 Treinamentos")
-        trein_do_colab = [
-            tr for tr in treinamentos if str(tr.get("colaborador_id") or "").strip() == colab_sel_id
-        ]
-        trein_req = _resolver_itens_catalogo(
-            refs_trein, treinamentos, ("nome", "titulo", "descricao")
-        )
-
-        if trein_do_colab:
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "Treinamento": str(tr.get("nome") or tr.get("titulo") or tr.get("descricao") or "—"),
-                        "Vencimento": _formatar_data_br(tr.get("data_vencimento") or tr.get("validade")),
-                        "Status": str(tr.get("status") or "—"),
-                    }
-                    for tr in trein_do_colab
-                ]),
-                use_container_width=True,
-                hide_index=True,
-            )
-        elif trein_req:
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "Treinamento": str(tr.get("nome") or tr.get("titulo") or tr.get("descricao") or "—"),
-                        "Vencimento": _formatar_data_br(tr.get("data_vencimento") or tr.get("validade")),
-                    }
-                    for tr in trein_req
-                ]),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("Nenhum treinamento vinculado à função deste colaborador.")
-
-    with tab2:
-        st.info("Histórico em PDF disponível para o colaborador selecionado.")
-
-    with tab3:
-        st.info("Visão por período disponível para acompanhamento de vencimentos.")
-
-
-render_relatorios = render_relatorio_colaborador
+        for tx in exames_req:
+            tx_id = str(tx.get("id") or "").strip()
