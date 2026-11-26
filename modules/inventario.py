@@ -13,7 +13,7 @@ CHAVE_MSG_INVENTARIO = "msg_feedback_inventario"
 COLUNAS_QTD_CANDIDATAS = ("quantidade_disponivel", "quantidade", "saldo", "qtd_disponivel", "qtd")
 
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=5, show_spinner=False)
 def _buscar_tabela(nome_tabela: str) -> list[dict]:
     supabase = get_supabase()
     try:
@@ -101,7 +101,8 @@ def _inserir_inventario_com_fallback(supabase, payload: dict):
     dados = _para_maiusculo(dict(payload))
     for _ in range(20):
         try:
-            return supabase.table("inventario_epi").insert(dados).execute()
+            res = supabase.table("inventario_epi").insert(dados).execute()
+            return res
         except Exception as e:
             msg = str(e)
             col_invalida = _extrair_coluna_pgrst204(msg)
@@ -113,10 +114,6 @@ def _inserir_inventario_com_fallback(supabase, payload: dict):
 
 
 def _atualizar_saldo_lote_com_fallback(supabase, lote_id, novo_saldo: int, lote_atual: dict, motivo: str):
-    """
-    Atualiza a coluna de saldo existente em inventario_epi fazendo fallback se a coluna
-    tiver outro nome no schema cache (ex.: quantidade_disponivel vs quantidade vs saldo).
-    """
     colunas_presentes = [c for c in COLUNAS_QTD_CANDIDATAS if c in lote_atual]
     candidatas_ordenacao = colunas_presentes + [c for c in COLUNAS_QTD_CANDIDATAS if c not in colunas_presentes]
 
@@ -132,13 +129,13 @@ def _atualizar_saldo_lote_com_fallback(supabase, lote_id, novo_saldo: int, lote_
         for _ in range(15):
             try:
                 res = supabase.table("inventario_epi").update(dados).eq("id", lote_id).execute()
-                if getattr(res, "data", None) is not None and len(res.data) > 0:
+                linhas_afetadas = getattr(res, "data", None) or []
+                if len(linhas_afetadas) > 0:
                     return res
-                # Se não retornou linha, tenta consultar para confirmar persistência
-                check = supabase.table("inventario_epi").select("*").eq("id", lote_id).execute()
-                if getattr(check, "data", None):
-                    return res
-                raise RuntimeError("Nenhuma linha encontrada em inventario_epi para o ID selecionado.")
+                raise RuntimeError(
+                    "O Supabase não retornou nenhuma linha alterada ao executar o UPDATE em 'inventario_epi'. "
+                    "Verifique se há política RLS permitindo UPDATE na tabela 'inventario_epi' e se o ID existe."
+                )
             except Exception as e:
                 ultimo_erro = e
                 col_invalida = _extrair_coluna_pgrst204(str(e))
