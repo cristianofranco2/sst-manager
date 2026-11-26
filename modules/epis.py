@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from database import get_supabase
+from ui_components import render_cabecalho_modulo
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -31,7 +32,7 @@ def _formatar_data_br(valor) -> str:
 
 
 def render_epis() -> None:
-    st.title("🥽 Cadastro de EPIs")
+    render_cabecalho_modulo("🥽 Cadastro de EPIs")
 
     try:
         supabase = get_supabase()
@@ -111,7 +112,6 @@ def render_epis() -> None:
                 estoque_minimo = st.number_input("Estoque Mínimo", min_value=0, value=0, step=1)
 
             descricao_protecao = st.text_area("Descrição da Proteção / Observações")
-
             submitted = st.form_submit_button("💾 Salvar EPI")
 
             if submitted:
