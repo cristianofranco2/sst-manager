@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import re
 import pandas as pd
 import streamlit as st
 
@@ -7,57 +8,34 @@ from ui_components import render_cabecalho_modulo
 
 DATA_MIN_CALENDARIO = date(1900, 1, 1)
 DATA_MAX_CALENDARIO = date(2100, 12, 31)
+CHAVE_MSG_INVENTARIO = "msg_feedback_inventario"
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_epis() -> list[dict]:
-    supabase = get_supabase()
-    res = supabase.table("epis").select("*").execute()
-    return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_inventario() -> list[dict]:
+@st.cache_data(ttl=15, show_spinner=False)
+def _buscar_tabela(nome_tabela: str) -> list[dict]:
     supabase = get_supabase()
     try:
-        res = supabase.table("inventario_epi").select("*").order("data_entrada", desc=True).execute()
-        return res.data or []
-    except Exception:
-        res = supabase.table("inventario_epi").select("*").execute()
-        return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_colaboradores() -> list[dict]:
-    supabase = get_supabase()
-    res = supabase.table("colaboradores").select("*").order("nome_completo").execute()
-    return res.data or []
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def _buscar_historico_trocas() -> list[dict]:
-    supabase = get_supabase()
-    try:
-        res = supabase.table("historico_trocas_epi").select("*").order("data_troca", desc=True).execute()
+        res = supabase.table(nome_tabela).select("*").execute()
         return res.data or []
     except Exception:
         return []
 
 
 def _limpar_cache_inventario() -> None:
-    _buscar_epis.clear()
-    _buscar_inventario.clear()
-    _buscar_colaboradores.clear()
-    _buscar_historico_trocas.clear()
+    st.cache_data.clear()
+
+
+def _normalizar_texto(valor) -> str:
+    return " ".join(str(valor or "").strip().lower().split())
 
 
 def _parse_data(valor) -> date | None:
     if not valor:
         return None
-    if isinstance(valor, date) and not isinstance(valor, datetime):
-        return valor
     if isinstance(valor, datetime):
         return valor.date()
+    if isinstance(valor, date):
+        return valor
     texto = str(valor).strip()[:10]
     if not texto:
         return None
@@ -71,105 +49,66 @@ def _parse_data(valor) -> date | None:
 
 def _formatar_data_br(valor) -> str:
     dt = _parse_data(valor)
-    return dt.strftime("%d/%m/%Y") if dt else "—"
+    if dt:
+        return dt.strftime("%d/%m/%Y")
+    texto = str(valor or "").strip()
+    return texto if texto else "—"
 
 
-def _normalizar_campo(valor) -> str:
-    return " ".join(str(valor or "").strip().lower().split())
-
-
-def _obter_ca(item: dict, epi_ref: dict) -> str:
-    ca = str(
-        item.get("ca")
-        or item.get("numero_ca")
-        or item.get("codigo_ca")
-        or epi_ref.get("ca")
-        or epi_ref.get("numero_ca")
-        or epi_ref.get("codigo_ca")
-        or ""
-    ).strip()
-    if not ca and item.get("observacoes"):
-        obs = str(item.get("observacoes"))
-        if "CA:" in obs:
-            ca = obs.split("CA:", 1)[1].split("|")[0].strip()
-    return ca or "—"
-
-
-def _obter_validade(item: dict, epi_ref: dict) -> date | None:
-    dt_val = _parse_data(
-        item.get("data_validade")
-        or item.get("data_validade_lote")
-        or item.get("validade_lote")
-        or epi_ref.get("data_validade_ca")
-        or epi_ref.get("validade_ca")
-        or epi_ref.get("data_validade")
+def _chave_agrupamento_epi(epi: dict) -> tuple[str, str, str]:
+    sku = _normalizar_texto(epi.get("codigo_sku") or epi.get("sku") or "")
+    ca = _normalizar_texto(epi.get("numero_ca") or epi.get("ca") or epi.get("codigo_ca") or "")
+    dt_val = _parse_data(epi.get("data_validade_ca") or epi.get("validade_ca"))
+    val_norm = dt_val.strftime("%Y-%m-%d") if dt_val else _normalizar_texto(
+        epi.get("data_validade_ca") or epi.get("validade_ca") or ""
     )
-    if not dt_val and item.get("observacoes"):
-        obs_str = str(item.get("observacoes"))
-        if "Val. Lote:" in obs_str:
-            trecho = obs_str.split("Val. Lote:", 1)[1][:10]
-            dt_val = _parse_data(trecho)
-    return dt_val
+    return (sku, ca, val_norm)
 
 
-def _extrair_campos_item(item: dict, mapa_epis: dict[str, dict]) -> dict:
-    eid = str(item.get("epi_id") or "").strip()
-    epi_ref = mapa_epis.get(eid, {})
-    sku = str(epi_ref.get("codigo_sku") or epi_ref.get("sku") or eid or "—").strip()
-    nome_epi = str(epi_ref.get("descricao") or epi_ref.get("nome_epi") or "EPI").strip()
-    ca = _obter_ca(item, epi_ref)
-    dt_val = _obter_validade(item, epi_ref)
-    validade_str = dt_val.strftime("%d/%m/%Y") if dt_val else "—"
-    saldo = int(item.get("quantidade_disponivel") or 0)
-    return {
-        "sku": sku,
-        "nome_epi": nome_epi,
-        "ca": ca,
-        "validade": validade_str,
-        "saldo": saldo,
-    }
+def _extrair_coluna_pgrst204(msg: str) -> str | None:
+    match = re.search(r"Could not find the '([^']+)' column", msg)
+    if match:
+        return match.group(1).strip()
+    match_alt = re.search(r"column ['\"]([^'\"]+)['\"]", msg)
+    if match_alt:
+        return match_alt.group(1).strip()
+    return None
 
 
-def _construir_tabela_saldos(inventario: list[dict], mapa_epis: dict[str, dict]) -> pd.DataFrame:
-    """
-    Soma o saldo apenas quando SKU, EPI, CA e Validade forem iguais.
-    Itens com mesmo SKU mas CA ou Validade diferentes permanecem em linhas separadas.
-    """
-    agrupado: dict[tuple[str, str, str, str], dict] = {}
+def _inserir_inventario_com_fallback(supabase, payload: dict):
+    dados = dict(payload)
+    for _ in range(15):
+        try:
+            return supabase.table("inventario_epi").insert(dados).execute()
+        except Exception as e:
+            msg = str(e)
+            col_invalida = _extrair_coluna_pgrst204(msg)
+            if col_invalida and col_invalida in dados and col_invalida != "epi_id":
+                dados.pop(col_invalida)
+                continue
+            raise
+    return supabase.table("inventario_epi").insert(dados).execute()
 
-    for item in inventario:
-        campos = _extrair_campos_item(item, mapa_epis)
-        chave = (
-            _normalizar_campo(campos["sku"]),
-            _normalizar_campo(campos["nome_epi"]),
-            _normalizar_campo(campos["ca"]),
-            campos["validade"],
-        )
 
-        if chave not in agrupado:
-            agrupado[chave] = {
-                "SKU": campos["sku"],
-                "EPI": campos["nome_epi"],
-                "CA": campos["ca"],
-                "Validade": campos["validade"],
-                "Saldo Total": 0,
-                "Qtd. Registros": 0,
-            }
-
-        agrupado[chave]["Saldo Total"] += campos["saldo"]
-        agrupado[chave]["Qtd. Registros"] += 1
-
-    if not agrupado:
-        return pd.DataFrame()
-
-    return pd.DataFrame(list(agrupado.values())).sort_values(
-        by=["SKU", "EPI", "Validade", "CA"],
-        ascending=[True, True, True, True],
-    )
+def _exibir_mensagem_pendente() -> None:
+    msg_info = st.session_state.pop(CHAVE_MSG_INVENTARIO, None)
+    if not msg_info:
+        return
+    tipo = msg_info.get("tipo", "success")
+    texto = msg_info.get("texto", "")
+    if not texto:
+        return
+    if tipo == "warning":
+        st.warning(texto)
+    elif tipo == "error":
+        st.error(texto)
+    else:
+        st.success(texto)
 
 
 def render_inventario() -> None:
-    render_cabecalho_modulo("📦 Cadastro de Inventário e Histórico de Trocas")
+    render_cabecalho_modulo("📦 Cadastro de Inventário")
+    _exibir_mensagem_pendente()
 
     try:
         supabase = get_supabase()
@@ -177,19 +116,25 @@ def render_inventario() -> None:
         st.error(f"Erro ao conectar com o Supabase: {e}")
         return
 
-    epis = _buscar_epis()
-    inventario = _buscar_inventario()
-    colaboradores = _buscar_colaboradores()
-    historico_trocas = _buscar_historico_trocas()
+    epis = _buscar_tabela("epis")
+    lotes = _buscar_tabela("inventario_epi")
 
-    mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id")}
-    mapa_colabs = {str(c.get("id") or "").strip(): c for c in colaboradores if c.get("id")}
+    mapa_epis = {str(e.get("id") or "").strip(): e for e in epis if e.get("id") is not None}
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    saldos_por_epi: dict[str, int] = {}
+    qtd_registros_por_epi: dict[str, int] = {}
+    for lote in lotes:
+        eid = str(lote.get("epi_id") or "").strip()
+        if not eid:
+            continue
+        qtd = int(lote.get("quantidade_disponivel") or 0)
+        saldos_por_epi[eid] = saldos_por_epi.get(eid, 0) + qtd
+        qtd_registros_por_epi[eid] = qtd_registros_por_epi.get(eid, 0) + 1
+
+    tab1, tab2, tab3 = st.tabs([
         "📦 Estoque / Lotes no Inventário",
         "➕ Entrada no Inventário",
         "🔧 Ajuste de Saldo",
-        "🕒 Histórico de Trocas por Colaborador",
     ])
 
     with tab1:
@@ -197,209 +142,181 @@ def render_inventario() -> None:
         with col_t:
             st.subheader("📊 Saldo Atual por EPI (Agrupado por SKU, CA e Validade)")
         with col_b:
-            if st.button("🔄 Atualizar", key="btn_att_inv_tab1", use_container_width=True):
+            if st.button("🔄 Atualizar", key="btn_atualizar_inv", use_container_width=True):
                 _limpar_cache_inventario()
                 st.rerun()
 
-        df_saldos_tab1 = _construir_tabela_saldos(inventario, mapa_epis)
-        if not df_saldos_tab1.empty:
-            st.dataframe(df_saldos_tab1, use_container_width=True, hide_index=True)
+        if epis:
+            agrupados: dict[tuple[str, str, str], dict] = {}
+            for e in epis:
+                eid = str(e.get("id") or "").strip()
+                chave = _chave_agrupamento_epi(e)
+                sku_disp = str(e.get("codigo_sku") or e.get("sku") or "—").strip()
+                desc_disp = str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "—").strip()
+                ca_disp = str(e.get("numero_ca") or e.get("ca") or e.get("codigo_ca") or "—").strip()
+                val_disp = _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca"))
+                saldo_epi = saldos_por_epi.get(eid, 0)
+                regs_epi = qtd_registros_por_epi.get(eid, 0)
+
+                if chave not in agrupados:
+                    agrupados[chave] = {
+                        "SKU": sku_disp,
+                        "EPI": desc_disp,
+                        "CA": ca_disp,
+                        "Validade": val_disp,
+                        "Saldo Total": saldo_epi,
+                        "Qtd. Registros": regs_epi,
+                    }
+                else:
+                    agrupados[chave]["Saldo Total"] += saldo_epi
+                    agrupados[chave]["Qtd. Registros"] += regs_epi
+
+            st.dataframe(
+                pd.DataFrame(list(agrupados.values())),
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
-            st.info("Nenhum saldo registrado no inventário.")
+            st.info("Nenhum EPI cadastrado no catálogo.")
 
         with st.expander("Ver lançamentos individuais (lotes / entradas)"):
-            if inventario:
+            if lotes:
                 linhas_lotes = []
-                for item in inventario:
-                    campos = _extrair_campos_item(item, mapa_epis)
+                for lote in lotes:
+                    eid = str(lote.get("epi_id") or "").strip()
+                    ep = mapa_epis.get(eid, {})
+                    sku = str(ep.get("codigo_sku") or ep.get("sku") or "—").strip()
+                    desc = str(ep.get("descricao") or ep.get("nome_epi") or ep.get("nome") or "—").strip()
+                    ca = str(ep.get("numero_ca") or ep.get("ca") or "—").strip()
                     linhas_lotes.append({
-                        "Lote": str(item.get("codigo_lote") or "—"),
-                        "SKU": campos["sku"],
-                        "EPI": campos["nome_epi"],
-                        "CA": campos["ca"],
-                        "Validade": campos["validade"],
-                        "Entrada": _formatar_data_br(item.get("data_entrada")),
-                        "Saldo Disponível": campos["saldo"],
-                        "Observações": str(item.get("observacoes") or "—"),
+                        "SKU": sku,
+                        "EPI": desc,
+                        "CA": ca,
+                        "Lote": str(lote.get("codigo_lote") or "—").strip(),
+                        "Quantidade": int(lote.get("quantidade_disponivel") or 0),
+                        "Data Entrada": _formatar_data_br(lote.get("data_entrada") or lote.get("created_at")),
+                        "Observações": str(lote.get("observacoes") or "—").strip(),
                     })
                 st.dataframe(pd.DataFrame(linhas_lotes), use_container_width=True, hide_index=True)
             else:
-                st.info("Nenhum lote registrado no inventário.")
+                st.info("Nenhum lançamento individual encontrado no inventário.")
 
     with tab2:
-        st.subheader("Registrar Entrada de EPI no Inventário")
-
+        st.subheader("➕ Entrada no Inventário")
         if not epis:
-            st.warning("Nenhum EPI cadastrado. Cadastre um EPI antes de registrar entrada no inventário.")
+            st.info("Cadastre um EPI antes de lançar entradas no inventário.")
         else:
-            ids_epis = list(mapa_epis.keys())
-
-            def _formatar_epi(eid: str) -> str:
-                e = mapa_epis.get(eid, {})
-                sku = str(e.get("codigo_sku") or e.get("sku") or eid).strip()
-                nome = str(e.get("descricao") or e.get("nome_epi") or "EPI").strip()
-                ca = _obter_ca({}, e)
+            opcoes_epi = []
+            for e in epis:
+                eid = str(e.get("id") or "").strip()
+                if not eid:
+                    continue
+                sku = str(e.get("codigo_sku") or e.get("sku") or "—").strip()
+                desc = str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "EPI").strip()
+                ca = str(e.get("numero_ca") or e.get("ca") or "—").strip()
                 val = _formatar_data_br(e.get("data_validade_ca") or e.get("validade_ca"))
-                return f"{sku} — {nome} | CA {ca} | Val. {val}"
-
-            epi_sel_id = st.selectbox(
-                "EPI (identificado por SKU, CA e Validade CA) *",
-                options=ids_epis,
-                format_func=_formatar_epi,
-                key="select_epi_entrada_inv",
-            )
+                opcoes_epi.append((eid, f"{desc} — SKU {sku} | CA {ca} | Val. {val}"))
 
             with st.form("form_entrada_inventario", clear_on_submit=True):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    quantidade = st.number_input("Quantidade *", min_value=1, value=10, step=1)
-                    codigo_lote = st.text_input("Código do Lote", placeholder="Ex: LOTE-2026-11")
+                    epi_sel_id = st.selectbox(
+                        "Selecione o EPI *",
+                        options=[o[0] for o in opcoes_epi],
+                        format_func=lambda eid: dict(opcoes_epi).get(eid, eid),
+                    )
                 with c2:
-                    data_entrada = st.date_input(
-                        "Data de Entrada *",
-                        value=date.today(),
-                        min_value=DATA_MIN_CALENDARIO,
-                        max_value=DATA_MAX_CALENDARIO,
-                        format="DD/MM/YYYY",
-                    )
+                    quantidade_entrada = st.number_input("Quantidade *", min_value=1, value=1, step=1)
                 with c3:
-                    informar_val_lote = st.checkbox("Informar validade específica do lote", value=False)
-                    data_validade_lote = st.date_input(
-                        "Validade do Lote",
+                    data_entrada = st.date_input(
+                        "Data de Entrada",
                         value=date.today(),
                         min_value=DATA_MIN_CALENDARIO,
                         max_value=DATA_MAX_CALENDARIO,
                         format="DD/MM/YYYY",
                     )
 
-                observacoes = st.text_area("Observações")
-                submitted = st.form_submit_button("💾 Registrar Entrada")
+                e1, e2 = st.columns(2)
+                with e1:
+                    codigo_lote = st.text_input("Código do Lote", placeholder="Ex: LOTE-2026-11")
+                with e2:
+                    observacoes_entrada = st.text_input("Observações", placeholder="Ex: Nota fiscal / reposição")
 
-                if submitted:
+                if st.form_submit_button("💾 Registrar Entrada"):
                     try:
-                        epi_escolhido = mapa_epis.get(epi_sel_id, {})
-                        ca_escolhido = _obter_ca({}, epi_escolhido)
-
-                        obs_texto = observacoes.strip()
-                        if informar_val_lote:
-                            marcador_val = f"Val. Lote: {data_validade_lote.strftime('%d/%m/%Y')}"
-                            obs_texto = f"{obs_texto} | {marcador_val}".strip(" |")
-                        if ca_escolhido != "—":
-                            marcador_ca = f"CA: {ca_escolhido}"
-                            if marcador_ca.lower() not in obs_texto.lower():
-                                obs_texto = f"{obs_texto} | {marcador_ca}".strip(" |")
-
-                        novo_lote = {
+                        payload = {
                             "epi_id": epi_sel_id,
-                            "codigo_lote": codigo_lote.strip(),
-                            "quantidade_disponivel": int(quantidade),
+                            "codigo_lote": codigo_lote.strip() or f"ENT-{data_entrada.strftime('%Y%m%d')}",
+                            "quantidade_disponivel": int(quantidade_entrada),
                             "data_entrada": str(data_entrada),
-                            "observacoes": obs_texto,
+                            "observacoes": observacoes_entrada.strip(),
                         }
-                        supabase.table("inventario_epi").insert(novo_lote).execute()
+                        _inserir_inventario_com_fallback(supabase, payload)
+                        st.session_state[CHAVE_MSG_INVENTARIO] = {
+                            "tipo": "success",
+                            "texto": f"Entrada de {int(quantidade_entrada)} un. registrada no inventário!",
+                        }
                         _limpar_cache_inventario()
-                        st.success("Entrada adicionada ao inventário com sucesso!")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao registrar entrada no inventário: {e}")
-
-        st.markdown("---")
-        st.subheader("📊 Saldo Atual por EPI (SKU, CA e Validade)")
-
-        df_saldos_tab2 = _construir_tabela_saldos(inventario, mapa_epis)
-        if not df_saldos_tab2.empty:
-            st.dataframe(df_saldos_tab2, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhum saldo registrado no inventário até o momento.")
+                    except Exception as err:
+                        st.error(f"Erro ao registrar entrada no inventário: {err}")
 
     with tab3:
-        st.subheader("Ajustar Saldo de Lote Existente")
-        if not inventario:
-            st.info("Nenhum lote disponível para ajuste.")
+        st.subheader("🔧 Ajuste de Saldo")
+        if not lotes:
+            st.info("Nenhum lote disponível no inventário para ajuste.")
         else:
-            opcoes_lotes = [str(l.get("id")) for l in inventario if l.get("id")]
-            mapa_rotulos_lote = {}
-            for l in inventario:
-                lid = str(l.get("id") or "")
-                if not lid:
+            opcoes_lotes = []
+            for lote in lotes:
+                lid = lote.get("id")
+                if lid is None:
                     continue
-                campos = _extrair_campos_item(l, mapa_epis)
-                mapa_rotulos_lote[lid] = (
-                    f"{campos['sku']} — {campos['nome_epi']} | CA {campos['ca']} | Val. {campos['validade']} | "
-                    f"Lote {l.get('codigo_lote') or '—'} | Saldo: {campos['saldo']}"
-                )
+                eid = str(lote.get("epi_id") or "").strip()
+                ep = mapa_epis.get(eid, {})
+                desc = str(ep.get("descricao") or ep.get("nome_epi") or ep.get("nome") or "EPI").strip()
+                lote_cod = str(lote.get("codigo_lote") or "Lote").strip()
+                saldo_atual = int(lote.get("quantidade_disponivel") or 0)
+                opcoes_lotes.append((lid, f"{desc} — {lote_cod} (Saldo atual: {saldo_atual})"))
 
-            lote_ajuste_id = st.selectbox(
-                "Selecione o Lote",
-                options=opcoes_lotes,
-                format_func=lambda lid: mapa_rotulos_lote.get(lid, lid),
-                key="select_lote_ajuste",
-            )
-            lote_atual = next((l for l in inventario if str(l.get("id")) == lote_ajuste_id), {})
-            saldo_atual = int(lote_atual.get("quantidade_disponivel") or 0)
+            mapa_lotes = {l["id"]: l for l in lotes if l.get("id") is not None}
 
-            with st.form("form_ajuste_saldo_lote"):
-                novo_saldo = st.number_input(
-                    "Novo Saldo Disponível",
-                    min_value=0,
-                    value=saldo_atual,
-                    step=1,
-                )
+            with st.form("form_ajuste_saldo_inventario"):
+                a1, a2 = st.columns(2)
+                with a1:
+                    lote_sel_id = st.selectbox(
+                        "Selecione o Lote",
+                        options=[o[0] for o in opcoes_lotes],
+                        format_func=lambda lid: dict(opcoes_lotes).get(lid, str(lid)),
+                    )
+                with a2:
+                    lote_atual = mapa_lotes.get(lote_sel_id, {})
+                    saldo_vigente = max(0, int(lote_atual.get("quantidade_disponivel") or 0))
+                    novo_saldo = st.number_input(
+                        "Novo Saldo Disponível",
+                        min_value=0,
+                        value=saldo_vigente,
+                        step=1,
+                    )
+
                 motivo_ajuste = st.text_input("Motivo do Ajuste", placeholder="Ex: Inventário físico / avaria")
-                btn_ajustar = st.form_submit_button("💾 Salvar Ajuste")
 
-                if btn_ajustar:
+                if st.form_submit_button("✅ Salvar Ajuste"):
                     try:
-                        obs_antiga = str(lote_atual.get("observacoes") or "").strip()
-                        extra_obs = f"Ajuste ({date.today().strftime('%d/%m/%Y')}): {saldo_atual} -> {int(novo_saldo)}"
+                        update_payload = {"quantidade_disponivel": int(novo_saldo)}
                         if motivo_ajuste.strip():
-                            extra_obs += f" ({motivo_ajuste.strip()})"
-                        obs_final = f"{obs_antiga} | {extra_obs}".strip(" |")
-
-                        supabase.table("inventario_epi").update({
-                            "quantidade_disponivel": int(novo_saldo),
-                            "observacoes": obs_final,
-                        }).eq("id", lote_ajuste_id).execute()
+                            obs_ant = str(lote_atual.get("observacoes") or "").strip()
+                            update_payload["observacoes"] = (
+                                f"{obs_ant} | Ajuste: {motivo_ajuste.strip()}" if obs_ant else f"Ajuste: {motivo_ajuste.strip()}"
+                            )
+                        supabase.table("inventario_epi").update(update_payload).eq("id", lote_sel_id).execute()
+                        st.session_state[CHAVE_MSG_INVENTARIO] = {
+                            "tipo": "success",
+                            "texto": f"Saldo atualizado para {int(novo_saldo)} un.!",
+                        }
                         _limpar_cache_inventario()
-                        st.success("Saldo atualizado com sucesso!")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao atualizar saldo: {e}")
+                    except Exception as err:
+                        st.error(f"Erro ao ajustar saldo: {err}")
 
-    with tab4:
-        st.subheader("Histórico de Trocas de EPI por Colaborador")
-        if not historico_trocas:
-            st.info("Nenhuma troca de EPI registrada até o momento.")
-        else:
-            opcoes_colab = ["TODOS"] + list(mapa_colabs.keys())
-            colab_filtro = st.selectbox(
-                "Filtrar por Colaborador",
-                options=opcoes_colab,
-                format_func=lambda cid: (
-                    "Todos os Colaboradores"
-                    if cid == "TODOS"
-                    else f"{mapa_colabs[cid].get('nome_completo', '—')} ({mapa_colabs[cid].get('matricula', '')})"
-                ),
-                key="filtro_colab_hist_trocas_inv",
-            )
 
-            linhas_hist = []
-            for h in historico_trocas:
-                cid = str(h.get("colaborador_id") or "").strip()
-                if colab_filtro != "TODOS" and cid != colab_filtro:
-                    continue
-                c_info = mapa_colabs.get(cid, {})
-                e_info = mapa_epis.get(str(h.get("epi_id") or "").strip(), {})
-                linhas_hist.append({
-                    "Data da Troca": _formatar_data_br(h.get("data_troca")),
-                    "Colaborador": c_info.get("nome_completo") or "—",
-                    "Matrícula": c_info.get("matricula") or "—",
-                    "EPI": e_info.get("descricao") or e_info.get("nome_epi") or "EPI",
-                    "Quantidade": int(h.get("quantidade") or 1),
-                    "Motivo": str(h.get("motivo") or "—"),
-                })
-
-            if linhas_hist:
-                st.dataframe(pd.DataFrame(linhas_hist), use_container_width=True, hide_index=True)
-            else:
-                st.info("Nenhuma troca encontrada para o colaborador selecionado.")
+render_inventario = render_inventario
