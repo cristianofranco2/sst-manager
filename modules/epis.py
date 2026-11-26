@@ -39,22 +39,55 @@ def _limpar_cache_epis() -> None:
     st.cache_data.clear()
 
 
-def _formatar_data_br(valor) -> str:
+def _normalizar_texto(valor) -> str:
+    return " ".join(str(valor or "").strip().lower().split())
+
+
+def _parse_data(valor) -> date | None:
     if not valor:
-        return "—"
+        return None
     if isinstance(valor, datetime):
-        return valor.strftime("%d/%m/%Y")
+        return valor.date()
     if isinstance(valor, date):
-        return valor.strftime("%d/%m/%Y")
+        return valor
     texto = str(valor).strip()[:10]
     if not texto:
-        return "—"
+        return None
     for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
         try:
-            return datetime.strptime(texto, fmt).strftime("%d/%m/%Y")
+            return datetime.strptime(texto, fmt).date()
         except ValueError:
             continue
-    return texto
+    return None
+
+
+def _formatar_data_br(valor) -> str:
+    dt = _parse_data(valor)
+    if dt:
+        return dt.strftime("%d/%m/%Y")
+    texto = str(valor or "").strip()
+    return texto if texto else "—"
+
+
+def _chave_unicidade_epi(sku: str, ca: str, validade: date | str | None) -> tuple[str, str, str]:
+    dt_val = _parse_data(validade)
+    val_norm = dt_val.strftime("%Y-%m-%d") if dt_val else _normalizar_texto(validade)
+    return (
+        _normalizar_texto(sku),
+        _normalizar_texto(ca),
+        val_norm,
+    )
+
+
+def _existe_epi_duplicado(epis_existentes: list[dict], sku: str, ca: str, validade: date) -> dict | None:
+    chave_nova = _chave_unicidade_epi(sku, ca, validade)
+    for e in epis_existentes:
+        sku_e = e.get("codigo_sku") or e.get("sku") or ""
+        ca_e = e.get("numero_ca") or e.get("ca") or e.get("codigo_ca") or ""
+        val_e = e.get("data_validade_ca") or e.get("validade_ca")
+        if _chave_unicidade_epi(sku_e, ca_e, val_e) == chave_nova:
+            return e
+    return None
 
 
 def _extrair_id_inserido(res) -> str | None:
@@ -96,10 +129,6 @@ def _inserir_epi_com_fallback(supabase, payload: dict):
 
 
 def _localizar_epi_id_recem_criado(supabase, sku: str, ca: str, descricao: str) -> str | None:
-    """
-    Localiza o ID do EPI recém-inserido mesmo quando o insert não retorna a linha
-    ou quando a tabela usa UUID em vez de ID numérico ordenável.
-    """
     try:
         res = (
             supabase.table("epis")
@@ -285,60 +314,71 @@ def render_epis() -> None:
                 if not sku_limpo or not desc_limpa or not ca_limpo:
                     st.warning("Preencha os campos obrigatórios: Código SKU, Descrição do EPI e Número do CA.")
                 else:
-                    try:
-                        novo_epi = {
-                            "codigo_sku": sku_limpo,
-                            "descricao": desc_limpa,
-                            "categoria": categoria.strip(),
-                            "modelo": modelo.strip(),
-                            "numero_ca": ca_limpo,
-                            "data_validade_ca": str(validade_ca),
-                            "estoque_minimo": int(estoque_minimo),
-                        }
-                        res_epi = _inserir_epi_com_fallback(supabase, novo_epi)
-                        epi_id = _extrair_id_inserido(res_epi)
+                    epis_atuais = _buscar_epis()
+                    duplicado = _existe_epi_duplicado(epis_atuais, sku_limpo, ca_limpo, validade_ca)
 
-                        if not epi_id:
-                            epi_id = _localizar_epi_id_recem_criado(
-                                supabase=supabase,
-                                sku=sku_limpo,
-                                ca=ca_limpo,
-                                descricao=desc_limpa,
-                            )
+                    if duplicado:
+                        desc_dupl = str(duplicado.get("descricao") or duplicado.get("nome_epi") or desc_limpa).strip()
+                        st.error(
+                            f"Cadastro bloqueado: já existe um EPI cadastrado com SKU '{sku_limpo}', "
+                            f"CA '{ca_limpo}' e Validade '{validade_ca.strftime('%d/%m/%Y')}' ({desc_dupl}). "
+                            f"Para adicionar novo saldo deste mesmo item, utilize o módulo de Inventário."
+                        )
+                    else:
+                        try:
+                            novo_epi = {
+                                "codigo_sku": sku_limpo,
+                                "descricao": desc_limpa,
+                                "categoria": categoria.strip(),
+                                "modelo": modelo.strip(),
+                                "numero_ca": ca_limpo,
+                                "data_validade_ca": str(validade_ca),
+                                "estoque_minimo": int(estoque_minimo),
+                            }
+                            res_epi = _inserir_epi_com_fallback(supabase, novo_epi)
+                            epi_id = _extrair_id_inserido(res_epi)
 
-                        if int(qtd_inicial) > 0:
-                            if epi_id:
-                                ok_inv, err_inv = _inserir_entrada_inicial_inventario(
+                            if not epi_id:
+                                epi_id = _localizar_epi_id_recem_criado(
                                     supabase=supabase,
-                                    epi_id=epi_id,
-                                    quantidade=int(qtd_inicial),
-                                    ca=ca_limpo,
-                                    validade_ca=validade_ca,
                                     sku=sku_limpo,
+                                    ca=ca_limpo,
                                     descricao=desc_limpa,
                                 )
-                                if ok_inv:
-                                    st.session_state[CHAVE_MSG_EPI] = {
-                                        "tipo": "success",
-                                        "texto": f"EPI '{desc_limpa}' adicionado com sucesso e saldo inicial de {int(qtd_inicial)} un. lançado no Inventário!",
-                                    }
+
+                            if int(qtd_inicial) > 0:
+                                if epi_id:
+                                    ok_inv, err_inv = _inserir_entrada_inicial_inventario(
+                                        supabase=supabase,
+                                        epi_id=epi_id,
+                                        quantidade=int(qtd_inicial),
+                                        ca=ca_limpo,
+                                        validade_ca=validade_ca,
+                                        sku=sku_limpo,
+                                        descricao=desc_limpa,
+                                    )
+                                    if ok_inv:
+                                        st.session_state[CHAVE_MSG_EPI] = {
+                                            "tipo": "success",
+                                            "texto": f"EPI '{desc_limpa}' adicionado com sucesso e saldo inicial de {int(qtd_inicial)} un. lançado no Inventário!",
+                                        }
+                                    else:
+                                        st.session_state[CHAVE_MSG_EPI] = {
+                                            "tipo": "warning",
+                                            "texto": f"EPI '{desc_limpa}' adicionado, mas houve um aviso ao lançar saldo inicial no Inventário: {err_inv}",
+                                        }
                                 else:
                                     st.session_state[CHAVE_MSG_EPI] = {
                                         "tipo": "warning",
-                                        "texto": f"EPI '{desc_limpa}' adicionado, mas houve um aviso ao lançar saldo inicial no Inventário: {err_inv}",
+                                        "texto": f"EPI '{desc_limpa}' adicionado, mas não foi possível localizar o ID para lançar o saldo inicial no Inventário.",
                                     }
                             else:
                                 st.session_state[CHAVE_MSG_EPI] = {
-                                    "tipo": "warning",
-                                    "texto": f"EPI '{desc_limpa}' adicionado, mas não foi possível localizar o ID para lançar o saldo inicial no Inventário.",
+                                    "tipo": "success",
+                                    "texto": f"EPI '{desc_limpa}' adicionado com sucesso!",
                                 }
-                        else:
-                            st.session_state[CHAVE_MSG_EPI] = {
-                                "tipo": "success",
-                                "texto": f"EPI '{desc_limpa}' adicionado com sucesso!",
-                            }
 
-                        _limpar_cache_epis()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar EPI no Supabase: {e}")
+                            _limpar_cache_epis()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao salvar EPI no Supabase: {e}")
