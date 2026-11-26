@@ -401,4 +401,5 @@ def render_epis() -> None:
                                     f"(ou restrição única no banco). Se o erro citar 'epis_codigo_sku_key', "
                                     f"rode o SQL para trocar a unicidade para (codigo_sku, numero_ca, data_validade_ca)."
                                 )
-                            else
+                            else:
+                                st.error(f"Erro ao salvar EPI no Supabase: {e}")
