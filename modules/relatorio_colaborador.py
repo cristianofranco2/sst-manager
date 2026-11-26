@@ -150,10 +150,10 @@ def _normalizar_lista_ids(valor) -> list[str]:
 
 
 def render_relatorio_colaborador() -> None:
-    st.title("📄 Relatório de SST e Auditoria de Vencimentos")
+    st.title("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
     try:
-        get_supabase()
+        supabase = get_supabase()
     except Exception as e:
         st.error(f"Erro ao conectar com o Supabase: {e}")
         return
@@ -181,7 +181,7 @@ def render_relatorio_colaborador() -> None:
     mapa_exames = {str(x["id"]).strip(): x for x in exames if x.get("id")}
 
     with tab1:
-        col_top1, col_top2 = st.columns([5, 1])
+        _, col_top2 = st.columns([5, 1])
         with col_top2:
             if st.button("🔄 Atualizar", key="btn_atualizar_relatorio_tab1", use_container_width=True):
                 _limpar_todo_cache_relatorio()
@@ -221,7 +221,10 @@ def render_relatorio_colaborador() -> None:
             h5.markdown(f"**Status:**  \n{'🔴 ' + status_colab if is_desligado else '🟢 ' + status_colab}")
 
         if is_desligado:
-            st.warning("⚠️ **Colaborador Desligado:** Os contadores de vencimento e alertas foram desativados para este colaborador. Os registros são mantidos exclusivamente para consulta histórica.")
+            st.warning(
+                "⚠️ **Colaborador Desligado:** Os contadores de vencimento e alertas foram desativados "
+                "para este colaborador. Os registros são mantidos exclusivamente para consulta histórica."
+            )
 
         funcao_id_encontrado = None
         if colab.get("funcao_id"):
@@ -514,7 +517,6 @@ def render_relatorio_colaborador() -> None:
 
         registros_periodo = []
 
-        # 1. Trocas de EPI
         if tipo_filtro in ["TODOS", "Trocas de EPI"]:
             for h in historico_trocas:
                 dt_evt = _parse_data(h.get("data_troca"))
@@ -534,7 +536,6 @@ def render_relatorio_colaborador() -> None:
                         "Novo Vencimento": _formatar_data_br(h.get("data_vencimento_novo")),
                     })
 
-        # 2. Exames Realizados
         if tipo_filtro in ["TODOS", "Exames Realizados"]:
             for ec in exames_colab:
                 dt_evt = _parse_data(ec.get("data_realizacao"))
@@ -554,7 +555,6 @@ def render_relatorio_colaborador() -> None:
                         "Novo Vencimento": _formatar_data_br(ec.get("data_vencimento")),
                     })
 
-        # 3. Treinamentos Realizados
         if tipo_filtro in ["TODOS", "Treinamentos Realizados"]:
             for tr in treinamentos:
                 dt_evt = _parse_data(tr.get("data_realizacao") or tr.get("data_emissao"))
@@ -562,20 +562,4 @@ def render_relatorio_colaborador() -> None:
                     cid = str(tr.get("colaborador_id") or "")
                     col_info = mapa_colabs.get(cid, {})
                     registros_periodo.append({
-                        "Data": dt_evt.strftime("%d/%m/%Y"),
-                        "Categoria": "🎓 Realização de Treinamento",
-                        "Colaborador": col_info.get("nome_completo") or "—",
-                        "Matrícula": col_info.get("matricula") or "—",
-                        "Status Colab.": col_info.get("status") or "Ativo",
-                        "Item / Evento": tr.get("tipo_treinamento") or "Treinamento",
-                        "Detalhes / Qtd": f"{tr.get('tipo_capacitacao', '')} ({tr.get('carga_horaria', '')}h)",
-                        "Novo Vencimento": _formatar_data_br(tr.get("data_vencimento")),
-                    })
-
-        if registros_periodo:
-            df_rep = pd.DataFrame(registros_periodo)
-            df_rep = df_rep.sort_values(by="Data", ascending=False)
-            st.markdown(f"##### Total de eventos no período ({dt_inicio.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}): **{len(df_rep)}**")
-            st.dataframe(df_rep, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhuma movimentação ou realização encontrada no período selecionado.")
+                        "Data":
