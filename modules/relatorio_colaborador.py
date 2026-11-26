@@ -10,6 +10,8 @@ import streamlit as st
 from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
+COLUNAS_QTD_INVENTARIO = ("quantidade_disponivel", "quantidade", "saldo", "qtd_disponivel", "qtd")
+
 
 @st.cache_data(ttl=10, show_spinner=False)
 def _buscar_tabela(nome_tabela: str) -> list[dict]:
@@ -62,27 +64,36 @@ def _formatar_data_br(valor) -> str:
     return dt.strftime("%d/%m/%Y") if dt else "—"
 
 
+def _obter_qtd_lote(lote: dict) -> int:
+    for col in COLUNAS_QTD_INVENTARIO:
+        if col in lote and lote[col] is not None:
+            try:
+                return int(float(lote[col]))
+            except Exception:
+                continue
+    return 0
+
+
 def _indicador_vencimento(data_venc_raw, hoje: date | None = None) -> tuple[str, str]:
     """
-    Regras de bolinhas:
-    - 🔴 Vencido: dt_venc < hoje
-    - 🟠 Vence em até 10 dias: 0 <= (dt_venc - hoje).days <= 10
-    - 🟡 Vence em até 30 dias: 10 < (dt_venc - hoje).days <= 30
-    - 🟢 Em dia: (dt_venc - hoje).days > 30
-    - ⚪ Sem vencimento: quando não há data de vencimento
+    Regras de alertas por bolinhas:
+    - 🔴 VENCIDO: dt_venc < hoje
+    - 🟠 VENCE EM ATÉ 10 DIAS: 0 <= (dt_venc - hoje).days <= 10
+    - 🟡 VENCE EM ATÉ 30 DIAS: 10 < (dt_venc - hoje).days <= 30
+    - 🟢 EM DIA: (dt_venc - hoje).days > 30
     """
     ref_hoje = hoje or date.today()
     dt_venc = _parse_data(data_venc_raw)
     if dt_venc is None:
-        return "⚪", "SEM VENCIMENTO"
+        return "🔴", "VENCIDO"
 
     dias_restantes = (dt_venc - ref_hoje).days
     if dias_restantes < 0:
-        return "🔴", f"VENCIDO ({abs(dias_restantes)}D)"
+        return "🔴", f"VENCIDO ({abs(dias_restantes)} DIAS)"
     if dias_restantes <= 10:
-        return "🟠", f"VENCE EM {dias_restantes}D"
+        return "🟠", f"VENCE EM {dias_restantes} DIAS"
     if dias_restantes <= 30:
-        return "🟡", f"VENCE EM {dias_restantes}D"
+        return "🟡", f"VENCE EM {dias_restantes} DIAS"
     return "🟢", "EM DIA"
 
 
@@ -121,6 +132,68 @@ def _executar_insert_fallback(supabase, tabela: str, payload: dict, obrigatorias
                 continue
             raise
     return supabase.table(tabela).insert(dados).execute()
+
+
+def _consumir_inventario_epi(supabase, inventario: list[dict], epi_id, qtd_consumir: int) -> tuple[bool, str, int | None]:
+    """
+    Consome qtd_consumir do saldo de inventario_epi para o epi_id informado.
+    Retorna (sucesso, mensagem, lote_id_usado).
+    """
+    eid_alvo = str(epi_id or "").strip()
+    if not eid_alvo:
+        return False, "EPI SEM ID VÁLIDO NO CATÁLOGO.", None
+
+    lotes_epi = [
+        inv for inv in inventario
+        if str(inv.get("epi_id") or "").strip() == eid_alvo and inv.get("id") is not None
+    ]
+    saldo_total = sum(max(0, _obter_qtd_lote(inv)) for inv in lotes_epi)
+    if saldo_total < int(qtd_consumir):
+        return (
+            False,
+            f"SALDO INSUFICIENTE NO INVENTÁRIO (DISPONÍVEL: {saldo_total} UN. | SOLICITADO: {int(qtd_consumir)} UN.).",
+            None,
+        )
+
+    restante = int(qtd_consumir)
+    lote_principal_id = None
+
+    for inv in lotes_epi:
+        if restante <= 0:
+            break
+        lid = inv.get("id")
+        disp_atual = max(0, _obter_qtd_lote(inv))
+        if disp_atual <= 0:
+            continue
+        baixa = min(disp_atual, restante)
+        novo_saldo = disp_atual - baixa
+        restante -= baixa
+        if lote_principal_id is None:
+            lote_principal_id = lid
+
+        cols_presentes = [c for c in COLUNAS_QTD_INVENTARIO if c in inv]
+        candidatas = cols_presentes + [c for c in COLUNAS_QTD_INVENTARIO if c not in cols_presentes]
+        atualizado = False
+
+        for col_q in candidatas:
+            try:
+                res = supabase.table("inventario_epi").update({col_q: int(novo_saldo)}).eq("id", lid).execute()
+                if getattr(res, "data", None):
+                    atualizado = True
+                    break
+            except Exception as e:
+                if _extrair_coluna_pgrst204(str(e)) == col_q:
+                    continue
+                raise
+
+        if not atualizado:
+            return (
+                False,
+                "NÃO FOI POSSÍVEL ATUALIZAR O SALDO EM 'inventario_epi' (VERIFIQUE PERMISSÕES / RLS NO SUPABASE).",
+                lote_principal_id,
+            )
+
+    return True, f"SALDO DO INVENTÁRIO ATUALIZADO (-{int(qtd_consumir)} UN.).", lote_principal_id
 
 
 def _converter_para_estrutura(valor):
@@ -211,9 +284,7 @@ def _extrair_mapa_referencias(valor) -> dict[str, int | None]:
 def _resolver_funcao_colaborador(
     colab: dict, funcoes: list[dict], cargos: list[dict]
 ) -> tuple[str | None, str]:
-    funcao_id = str(
-        colab.get("funcao_id") or colab.get("cargo_id") or ""
-    ).strip()
+    funcao_id = str(colab.get("funcao_id") or colab.get("cargo_id") or "").strip()
     nome_direto = str(
         colab.get("funcao")
         or colab.get("funcao_nome")
@@ -356,6 +427,19 @@ def _durabilidade_dias_epi(epi: dict) -> int:
             except Exception:
                 continue
     return 180
+
+
+def _formatar_periodo_meses(val) -> str:
+    if val is None or str(val).strip() == "" or str(val).strip() == "—":
+        return "—"
+    txt = str(val).strip().upper()
+    if any(u in txt for u in ("MES", "MÊS", "DIA", "ANO")):
+        return txt
+    try:
+        num = int(float(txt))
+        return f"{num} {'MÊS' if num == 1 else 'MESES'}"
+    except Exception:
+        return txt
 
 
 def _latin1(texto: str) -> str:
@@ -589,6 +673,144 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
     return buf.getvalue()
 
 
+def _conteudo_dialog_troca_epi(
+    supabase, inventario: list[dict], colab_sel_id: str, nome_colab: str, e: dict, qtd_req, dur_dias: int, fechar_cb
+) -> None:
+    nome_epi_str = str(e.get("descricao") or e.get("nome_epi") or e.get("nome") or "EPI").strip().upper()
+    sku_str = str(e.get("codigo_sku") or e.get("sku") or "—").strip().upper()
+    eid_alvo = str(e.get("id") or "").strip()
+
+    saldo_disp_epi = sum(
+        max(0, _obter_qtd_lote(inv))
+        for inv in inventario
+        if str(inv.get("epi_id") or "").strip() == eid_alvo
+    )
+    st.caption(f"EPI: **{nome_epi_str}** (SKU: {sku_str}) — Saldo disponível no inventário: **{saldo_disp_epi} UN.**")
+
+    qtd_troca = st.number_input(
+        "Quantidade", min_value=1, value=max(1, int(qtd_req or 1)), step=1, key=f"q_troca_{colab_sel_id}_{eid_alvo}"
+    )
+    data_troca = st.date_input(
+        "Data da Entrega / Troca", value=date.today(), format="DD/MM/YYYY", key=f"d_troca_{colab_sel_id}_{eid_alvo}"
+    )
+    motivo_troca = st.text_input(
+        "Motivo / Obs.", placeholder="EX: TROCA PERIÓDICA", key=f"m_troca_{colab_sel_id}_{eid_alvo}"
+    )
+    novo_venc_prev = data_troca + timedelta(days=dur_dias)
+    st.caption(
+        f"Durabilidade: **{dur_dias} DIAS** — Vencimento calculado pela entrega: **{novo_venc_prev.strftime('%d/%m/%Y')}**"
+    )
+
+    b1, b2 = st.columns(2)
+    if b1.button("✅ Confirmar Troca", key=f"ok_troca_{colab_sel_id}_{eid_alvo}", use_container_width=True):
+        try:
+            ok_inv, msg_inv, lote_id = _consumir_inventario_epi(supabase, inventario, e.get("id"), int(qtd_troca))
+            if not ok_inv:
+                st.error(msg_inv)
+                return
+
+            payload_troca = {
+                "colaborador_id": colab_sel_id,
+                "epi_id": e.get("id"),
+                "inventario_id": lote_id,
+                "quantidade": int(qtd_troca),
+                "data_troca": str(data_troca),
+                "data_entrega": str(data_troca),
+                "data_vencimento": str(novo_venc_prev),
+                "motivo": motivo_troca.strip().upper(),
+                "observacoes": motivo_troca.strip().upper(),
+            }
+            _executar_insert_fallback(
+                supabase,
+                "historico_trocas_epi",
+                payload_troca,
+                obrigatorias={"colaborador_id", "epi_id", "quantidade"},
+            )
+            fechar_cb()
+            st.session_state["msg_relatorio_colab"] = {
+                "tipo": "success",
+                "texto": f"TROCA DE {nome_epi_str} ({int(qtd_troca)} UN.) REGISTRADA PARA {nome_colab}! {msg_inv}",
+            }
+            _limpar_cache()
+            st.rerun()
+        except Exception as err:
+            st.error(f"Erro ao registrar troca: {err}")
+
+    if b2.button("❌ Cancelar", key=f"canc_troca_{colab_sel_id}_{eid_alvo}", use_container_width=True):
+        fechar_cb()
+        st.rerun()
+
+
+def _conteudo_dialog_renovar(
+    supabase,
+    tipo_label: str,
+    tabela_destino: str,
+    colab_sel_id: str,
+    nome_colab: str,
+    item_dict: dict,
+    nome_item: str,
+    per_padrao: int,
+    fechar_cb,
+) -> None:
+    chave_base = f"{tabela_destino}_{colab_sel_id}_{re.sub(r'[^a-zA-Z0-9]', '_', nome_item)}"
+    st.caption(f"{tipo_label}: **{nome_item}**")
+
+    data_real = st.date_input(
+        "Data de Realização / Conclusão", value=date.today(), format="DD/MM/YYYY", key=f"d_ren_{chave_base}"
+    )
+    meses_val = st.number_input(
+        "Validade / Período (MESES)", min_value=1, value=per_padrao, step=1, key=f"m_ren_{chave_base}"
+    )
+    novo_venc = _somar_meses(data_real, int(meses_val))
+    st.caption(f"Período: **{int(meses_val)} MESES** — Novo vencimento: **{novo_venc.strftime('%d/%m/%Y')}**")
+
+    b1, b2 = st.columns(2)
+    if b1.button("✅ Confirmar Renovação", key=f"ok_ren_{chave_base}", use_container_width=True):
+        try:
+            if tabela_destino == "exames_colaborador":
+                payload = {
+                    "colaborador_id": colab_sel_id,
+                    "tipo_exame_id": item_dict.get("tipo_exame_id") or item_dict.get("id"),
+                    "nome": nome_item.upper(),
+                    "data_realizacao": str(data_real),
+                    "data_vencimento": str(novo_venc),
+                    "validade": str(novo_venc),
+                    "status": "EM DIA",
+                }
+            else:
+                payload = {
+                    "colaborador_id": colab_sel_id,
+                    "nome_treinamento": nome_item.upper(),
+                    "tipo_treinamento": str(item_dict.get("tipo_treinamento") or nome_item).upper(),
+                    "nome": nome_item.upper(),
+                    "titulo": nome_item.upper(),
+                    "data_realizacao": str(data_real),
+                    "data_conclusao": str(data_real),
+                    "data_vencimento": str(novo_venc),
+                    "validade": str(novo_venc),
+                    "status": "EM DIA",
+                }
+            _executar_insert_fallback(
+                supabase,
+                tabela_destino,
+                payload,
+                obrigatorias={"colaborador_id"},
+            )
+            fechar_cb()
+            st.session_state["msg_relatorio_colab"] = {
+                "tipo": "success",
+                "texto": f"{tipo_label.upper()} '{nome_item}' RENOVADO ATÉ {novo_venc.strftime('%d/%m/%Y')}!",
+            }
+            _limpar_cache()
+            st.rerun()
+        except Exception as err:
+            st.error(f"Erro ao renovar: {err}")
+
+    if b2.button("❌ Cancelar", key=f"canc_ren_{chave_base}", use_container_width=True):
+        fechar_cb()
+        st.rerun()
+
+
 def render_relatorio_colaborador() -> None:
     render_cabecalho_modulo("📄 Relatório de Pendências e Vencimentos por Colaborador")
 
@@ -694,7 +916,7 @@ def render_relatorio_colaborador() -> None:
         dt_venc_epi = (dt_entrega + timedelta(days=dur_dias)) if dt_entrega else None
         bol_epi, rot_epi = _indicador_vencimento(dt_venc_epi)
         obs_t = str(t.get("motivo") or t.get("observacoes") or "").strip().upper()
-        det_t = f"QTD: {t.get('quantidade') or 1} | DUR.: {dur_dias}D" + (f" — {obs_t}" if obs_t else "")
+        det_t = f"QTD: {t.get('quantidade') or 1} | DUR.: {dur_dias} DIAS" + (f" — {obs_t}" if obs_t else "")
         historico_itens.append({
             "Tipo": "TROCA DE EPI",
             "Item": nome_e,
@@ -751,7 +973,7 @@ def render_relatorio_colaborador() -> None:
     ])
 
     with tab1:
-        # ---------------- EPIs (vencimento pela data de entrega + durabilidade) ----------------
+        # ---------------- EPIs ----------------
         st.subheader("🥽 EPIs")
         epis_req = _resolver_itens_catalogo(
             refs_epi, epis, ("descricao", "nome_epi", "codigo_sku", "numero_ca")
@@ -764,7 +986,6 @@ def render_relatorio_colaborador() -> None:
                 ca_str = str(e.get("numero_ca") or e.get("ca") or "—").strip().upper()
                 dur_dias = _durabilidade_dias_epi(e)
 
-                # Busca última entrega/troca deste EPI para este colaborador
                 trocas_deste_epi = []
                 for t in trocas_do_colab:
                     if str(t.get("epi_id") or "").strip() == str(e.get("id") or "").strip():
@@ -780,86 +1001,41 @@ def render_relatorio_colaborador() -> None:
                     texto_venc_epi = f"{bol_epi} {_formatar_data_br(dt_venc_epi)} ({rot_epi})"
                     texto_entrega_epi = _formatar_data_br(dt_entrega_ref)
                 else:
-                    bol_epi, rot_epi = _indicador_vencimento(None)
-                    texto_venc_epi = f"{bol_epi} SEM ENTREGA ({dur_dias}D)"
+                    texto_venc_epi = "🔴 VENCIDO (SEM ENTREGA)"
                     texto_entrega_epi = "—"
 
                 qtd_req = e.get("_qtd_requisito")
+                chave_modal_epi = f"abrir_troca_epi_{colab_sel_id}_{eid}_{idx}"
+
+                def _fechar_epi(k=chave_modal_epi):
+                    st.session_state[k] = False
 
                 with st.container(border=True):
-                    cols = st.columns([1.0, 2.2, 1.0, 2.3, 1.2, 1.3])
+                    cols = st.columns([1.0, 2.1, 1.3, 2.3, 0.9, 1.3])
                     cols[0].markdown(f"**SKU:**  \n{sku_str}")
                     cols[1].markdown(f"**EPI:**  \n{nome_epi_str}")
-                    cols[2].markdown(f"**CA / Dur.:**  \n{ca_str} ({dur_dias}D)")
+                    cols[2].markdown(f"**CA / Dur.:**  \n{ca_str} ({dur_dias} DIAS)")
                     cols[3].markdown(f"**Venc. (Entrega: {texto_entrega_epi}):**  \n{texto_venc_epi}")
                     cols[4].markdown(f"**Qtd:**  \n{qtd_req if qtd_req is not None else '—'}")
 
-                    chave_acao_epi = f"abrir_troca_epi_{colab_sel_id}_{eid}_{idx}"
-                    if cols[5].button("🔄 Trocar", key=f"btn_{chave_acao_epi}", use_container_width=True):
-                        st.session_state[chave_acao_epi] = not st.session_state.get(chave_acao_epi, False)
+                    if cols[5].button("🔄 Trocar", key=f"btn_{chave_modal_epi}", use_container_width=True):
+                        st.session_state[chave_modal_epi] = True
 
-                    if st.session_state.get(chave_acao_epi, False):
-                        with st.form(f"form_{chave_acao_epi}"):
-                            f1, f2, f3 = st.columns(3)
-                            with f1:
-                                qtd_troca = st.number_input(
-                                    "Quantidade", min_value=1, value=max(1, int(qtd_req or 1)), step=1
+                    if st.session_state.get(chave_modal_epi, False):
+                        if hasattr(st, "dialog"):
+                            @st.dialog(f"🔄 Trocar EPI — {nome_epi_str}")
+                            def _dlg_epi(
+                                _e=e, _q=qtd_req, _d=dur_dias, _cb=_fechar_epi
+                            ):
+                                _conteudo_dialog_troca_epi(
+                                    supabase, inventario, colab_sel_id, nome_colab, _e, _q, _d, _cb
                                 )
-                            with f2:
-                                data_troca = st.date_input("Data da Entrega / Troca", value=date.today(), format="DD/MM/YYYY")
-                            with f3:
-                                motivo_troca = st.text_input("Motivo / Obs.", placeholder="EX: TROCA PERIÓDICA")
-                            novo_venc_prev = data_troca + timedelta(days=dur_dias)
-                            st.caption(
-                                f"Durabilidade do EPI: **{dur_dias} dias** — Próximo vencimento: **{novo_venc_prev.strftime('%d/%m/%Y')}**"
-                            )
-                            if st.form_submit_button("✅ Confirmar Troca"):
-                                try:
-                                    lote_id = None
-                                    qtd_disp_lote = 0
-                                    for inv in inventario:
-                                        if str(inv.get("epi_id") or "").strip() == str(e.get("id") or "").strip():
-                                            disp = int(inv.get("quantidade_disponivel") or inv.get("quantidade") or inv.get("saldo") or 0)
-                                            if disp >= int(qtd_troca) and inv.get("id") is not None:
-                                                lote_id = inv["id"]
-                                                qtd_disp_lote = disp
-                                                break
-
-                                    payload_troca = {
-                                        "colaborador_id": colab_sel_id,
-                                        "epi_id": e.get("id"),
-                                        "inventario_id": lote_id,
-                                        "quantidade": int(qtd_troca),
-                                        "data_troca": str(data_troca),
-                                        "data_entrega": str(data_troca),
-                                        "data_vencimento": str(novo_venc_prev),
-                                        "motivo": motivo_troca.strip().upper(),
-                                        "observacoes": motivo_troca.strip().upper(),
-                                    }
-                                    _executar_insert_fallback(
-                                        supabase,
-                                        "historico_trocas_epi",
-                                        payload_troca,
-                                        obrigatorias={"colaborador_id", "epi_id", "quantidade"},
-                                    )
-                                    if lote_id is not None:
-                                        novo_saldo = max(0, qtd_disp_lote - int(qtd_troca))
-                                        try:
-                                            supabase.table("inventario_epi").update(
-                                                {"quantidade_disponivel": novo_saldo}
-                                            ).eq("id", lote_id).execute()
-                                        except Exception:
-                                            pass
-
-                                    st.session_state[chave_acao_epi] = False
-                                    st.session_state["msg_relatorio_colab"] = {
-                                        "tipo": "success",
-                                        "texto": f"TROCA DE {nome_epi_str} ({int(qtd_troca)} UN.) REGISTRADA PARA {nome_colab}! VENC.: {novo_venc_prev.strftime('%d/%m/%Y')}",
-                                    }
-                                    _limpar_cache()
-                                    st.rerun()
-                                except Exception as err:
-                                    st.error(f"Erro ao registrar troca: {err}")
+                            _dlg_epi()
+                        else:
+                            with st.container(border=True):
+                                _conteudo_dialog_troca_epi(
+                                    supabase, inventario, colab_sel_id, nome_colab, e, qtd_req, dur_dias, _fechar_epi
+                                )
         else:
             st.info("NENHUM EPI VINCULADO À FUNÇÃO DESTE COLABORADOR.")
 
@@ -899,12 +1075,12 @@ def render_relatorio_colaborador() -> None:
             for idx, ex_item in enumerate(linhas_exames_exibir):
                 ex_id = str(ex_item.get("tipo_exame_id") or ex_item.get("id") or idx).strip()
                 nome_ex = str(ex_item.get("Exame") or _nome_exame(ex_item)).upper()
-                per_val = (
+                per_raw = (
                     ex_item.get("periodicidade_meses")
                     or ex_item.get("validade_meses")
                     or ex_item.get("periodicidade")
-                    or "—"
                 )
+                per_str = _formatar_periodo_meses(per_raw)
                 dt_real_str = _formatar_data_br(
                     ex_item.get("data_realizacao") or ex_item.get("data_exame") or ex_item.get("data_aso")
                 )
@@ -913,78 +1089,48 @@ def render_relatorio_colaborador() -> None:
                 bol_ex, rot_ex = _indicador_vencimento(venc_raw)
                 status_ex = str(ex_item.get("status") or ex_item.get("resultado") or rot_ex).upper()
 
+                chave_modal_ex = f"abrir_ren_exame_{colab_sel_id}_{ex_id}_{idx}"
+
+                def _fechar_ex(k=chave_modal_ex):
+                    st.session_state[k] = False
+
+                try:
+                    per_padrao = max(1, int(float(per_raw))) if per_raw is not None else 12
+                except Exception:
+                    per_padrao = 12
+
                 with st.container(border=True):
-                    cols = st.columns([2.2, 1.0, 1.2, 1.9, 1.7, 1.3])
+                    cols = st.columns([2.1, 1.1, 1.2, 1.9, 1.6, 1.3])
                     cols[0].markdown(f"**Exame:**  \n{nome_ex}")
-                    cols[1].markdown(f"**Period.:**  \n{per_val}")
+                    cols[1].markdown(f"**Período:**  \n{per_str}")
                     cols[2].markdown(f"**Realização:**  \n{dt_real_str}")
                     cols[3].markdown(f"**Vencimento:**  \n{bol_ex} {dt_venc_str}")
                     cols[4].markdown(f"**Status:**  \n{bol_ex} {status_ex}")
 
-                    chave_ren_ex = f"abrir_ren_exame_{colab_sel_id}_{ex_id}_{idx}"
-                    if cols[5].button("🔁 Renovar", key=f"btn_{chave_ren_ex}", use_container_width=True):
-                        st.session_state[chave_ren_ex] = not st.session_state.get(chave_ren_ex, False)
+                    if cols[5].button("🔁 Renovar", key=f"btn_{chave_modal_ex}", use_container_width=True):
+                        st.session_state[chave_modal_ex] = True
 
-                    if st.session_state.get(chave_ren_ex, False):
-                        try:
-                            per_padrao = max(
-                                1, int(ex_item.get("periodicidade_meses") or ex_item.get("validade_meses") or 12)
-                            )
-                        except Exception:
-                            per_padrao = 12
-
-                        with st.container(border=True):
-                            with st.form(f"form_{chave_ren_ex}"):
-                                r1, r2 = st.columns(2)
-                                with r1:
-                                    data_real_ex = st.date_input("Data de Realização", value=date.today(), format="DD/MM/YYYY")
-                                with r2:
-                                    meses_ex = st.number_input(
-                                        "Validade / Periodicidade (meses)", min_value=1, value=per_padrao, step=1
-                                    )
-                                novo_venc_ex = _somar_meses(data_real_ex, int(meses_ex))
-                                st.caption(f"Novo vencimento: **{novo_venc_ex.strftime('%d/%m/%Y')}**")
-                                if st.form_submit_button("✅ Confirmar Renovação"):
-                                    try:
-                                        tx_id_alvo = (
-                                            ex_item.get("tipo_exame_id")
-                                            or (
-                                                ex_item.get("id")
-                                                if str(ex_item.get("id") or "").strip() in mapa_tipos_ex
-                                                else None
-                                            )
-                                        )
-                                        payload_ex = {
-                                            "colaborador_id": colab_sel_id,
-                                            "tipo_exame_id": tx_id_alvo,
-                                            "nome": nome_ex,
-                                            "data_realizacao": str(data_real_ex),
-                                            "data_vencimento": str(novo_venc_ex),
-                                            "validade": str(novo_venc_ex),
-                                            "status": "EM DIA",
-                                        }
-                                        _executar_insert_fallback(
-                                            supabase,
-                                            "exames_colaborador",
-                                            payload_ex,
-                                            obrigatorias={"colaborador_id"},
-                                        )
-                                        st.session_state[chave_ren_ex] = False
-                                        st.session_state["msg_relatorio_colab"] = {
-                                            "tipo": "success",
-                                            "texto": f"EXAME '{nome_ex}' RENOVADO ATÉ {novo_venc_ex.strftime('%d/%m/%Y')}!",
-                                        }
-                                        _limpar_cache()
-                                        st.rerun()
-                                    except Exception as err:
-                                        st.error(f"Erro ao renovar exame: {err}")
+                    if st.session_state.get(chave_modal_ex, False):
+                        if hasattr(st, "dialog"):
+                            @st.dialog(f"🔁 Renovar Exame — {nome_ex}")
+                            def _dlg_ex(
+                                _item=ex_item, _n=nome_ex, _p=per_padrao, _cb=_fechar_ex
+                            ):
+                                _conteudo_dialog_renovar(
+                                    supabase, "Exame", "exames_colaborador", colab_sel_id, nome_colab, _item, _n, _p, _cb
+                                )
+                            _dlg_ex()
+                        else:
+                            with st.container(border=True):
+                                _conteudo_dialog_renovar(
+                                    supabase, "Exame", "exames_colaborador", colab_sel_id, nome_colab, ex_item, nome_ex, per_padrao, _fechar_ex
+                                )
         else:
             st.info("NENHUM EXAME VINCULADO À FUNÇÃO DESTE COLABORADOR.")
 
         # ---------------- TREINAMENTOS ----------------
         st.subheader("🎓 Treinamentos")
 
-        # Coleta treinamentos vinculados ao colaborador, à função/cargo ou do catálogo se referenciados
         trein_vinculados_colab = [
             tr for tr in treinamentos
             if str(tr.get("colaborador_id") or "").strip() == colab_sel_id
@@ -1007,7 +1153,6 @@ def render_relatorio_colaborador() -> None:
             manter_nao_encontrados=True,
         )
 
-        # Se não houver requisito explícito em funcao_requisitos para esta função, exibe treinamentos gerais/da função cadastrados
         trein_base_lista = list(trein_vinculados_colab) + list(trein_vinculados_funcao) + list(trein_req)
         if not trein_base_lista and treinamentos:
             trein_base_lista = [
@@ -1030,77 +1175,49 @@ def render_relatorio_colaborador() -> None:
             for idx, tr_item in enumerate(linhas_trein_exibir):
                 tr_id = str(tr_item.get("id") or idx).strip()
                 nome_tr = str(tr_item.get("Treinamento") or _nome_treinamento(tr_item)).upper()
-                nr_tr = str(
-                    tr_item.get("tipo_treinamento")
-                    or tr_item.get("nr")
-                    or tr_item.get("codigo_nr")
-                    or tr_item.get("carga_horaria")
-                    or "—"
-                ).strip().upper()
+                per_tr_str = _formatar_periodo_meses(tr_item.get("validade_meses") or tr_item.get("periodicidade_meses"))
                 real_tr_str = _formatar_data_br(tr_item.get("data_realizacao") or tr_item.get("data_conclusao"))
                 venc_raw_tr = tr_item.get("data_vencimento") or tr_item.get("validade")
                 venc_tr_str = _formatar_data_br(venc_raw_tr)
                 bol_tr, rot_tr = _indicador_vencimento(venc_raw_tr)
                 status_tr = str(tr_item.get("status") or rot_tr).upper()
 
+                chave_modal_tr = f"abrir_ren_trein_{colab_sel_id}_{tr_id}_{idx}"
+
+                def _fechar_tr(k=chave_modal_tr):
+                    st.session_state[k] = False
+
+                try:
+                    per_trein_padrao = max(1, int(float(tr_item.get("validade_meses") or 12)))
+                except Exception:
+                    per_trein_padrao = 12
+
                 with st.container(border=True):
-                    cols = st.columns([2.2, 1.1, 1.2, 1.9, 1.6, 1.3])
+                    cols = st.columns([2.1, 1.1, 1.2, 1.9, 1.6, 1.3])
                     cols[0].markdown(f"**Treinamento:**  \n{nome_tr}")
-                    cols[1].markdown(f"**Tipo / NR:**  \n{nr_tr}")
+                    cols[1].markdown(f"**Período:**  \n{per_tr_str}")
                     cols[2].markdown(f"**Realização:**  \n{real_tr_str}")
                     cols[3].markdown(f"**Vencimento:**  \n{bol_tr} {venc_tr_str}")
                     cols[4].markdown(f"**Status:**  \n{bol_tr} {status_tr}")
 
-                    chave_ren_tr = f"abrir_ren_trein_{colab_sel_id}_{tr_id}_{idx}"
-                    if cols[5].button("🔁 Renovar", key=f"btn_{chave_ren_tr}", use_container_width=True):
-                        st.session_state[chave_ren_tr] = not st.session_state.get(chave_ren_tr, False)
+                    if cols[5].button("🔁 Renovar", key=f"btn_{chave_modal_tr}", use_container_width=True):
+                        st.session_state[chave_modal_tr] = True
 
-                    if st.session_state.get(chave_ren_tr, False):
-                        per_trein_padrao = 12
-                        try:
-                            if tr_item.get("validade_meses"):
-                                per_trein_padrao = max(1, int(tr_item.get("validade_meses")))
-                        except Exception:
-                            per_trein_padrao = 12
-
-                        with st.container(border=True):
-                            with st.form(f"form_{chave_ren_tr}"):
-                                t1, t2 = st.columns(2)
-                                with t1:
-                                    data_real_tr = st.date_input("Data de Conclusão", value=date.today(), format="DD/MM/YYYY")
-                                with t2:
-                                    meses_tr = st.number_input("Validade (meses)", min_value=1, value=per_trein_padrao, step=1)
-                                novo_venc_tr = _somar_meses(data_real_tr, int(meses_tr))
-                                st.caption(f"Novo vencimento: **{novo_venc_tr.strftime('%d/%m/%Y')}**")
-                                if st.form_submit_button("✅ Confirmar Renovação"):
-                                    try:
-                                        payload_tr = {
-                                            "colaborador_id": colab_sel_id,
-                                            "nome_treinamento": nome_tr,
-                                            "tipo_treinamento": str(tr_item.get("tipo_treinamento") or nome_tr).upper(),
-                                            "nome": nome_tr,
-                                            "titulo": nome_tr,
-                                            "data_realizacao": str(data_real_tr),
-                                            "data_conclusao": str(data_real_tr),
-                                            "data_vencimento": str(novo_venc_tr),
-                                            "validade": str(novo_venc_tr),
-                                            "status": "EM DIA",
-                                        }
-                                        _executar_insert_fallback(
-                                            supabase,
-                                            "treinamentos",
-                                            payload_tr,
-                                            obrigatorias={"tipo_treinamento", "data_vencimento"},
-                                        )
-                                        st.session_state[chave_ren_tr] = False
-                                        st.session_state["msg_relatorio_colab"] = {
-                                            "tipo": "success",
-                                            "texto": f"TREINAMENTO '{nome_tr}' RENOVADO ATÉ {novo_venc_tr.strftime('%d/%m/%Y')}!",
-                                        }
-                                        _limpar_cache()
-                                        st.rerun()
-                                    except Exception as err:
-                                        st.error(f"Erro ao renovar treinamento: {err}")
+                    if st.session_state.get(chave_modal_tr, False):
+                        if hasattr(st, "dialog"):
+                            @st.dialog(f"🔁 Renovar Treinamento — {nome_tr}")
+                            def _dlg_tr(
+                                _item=tr_item, _n=nome_tr, _p=per_trein_padrao, _cb=_fechar_tr
+                            ):
+                                _conteudo_dialog_renovar(
+                                    supabase, "Treinamento", "treinamentos", colab_sel_id, nome_colab, _item, _n, _p, _cb
+                                )
+                            _dlg_tr()
+                        else:
+                            with st.container(border=True):
+                                _conteudo_dialog_renovar(
+                                    supabase, "Treinamento", "treinamentos", colab_sel_id, nome_colab, tr_item, nome_tr, per_trein_padrao, _fechar_tr
+                                )
         else:
             st.info("NENHUM TREINAMENTO CADASTRADO OU VINCULADO.")
 
