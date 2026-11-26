@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+import base64
 import math
 from PIL import Image as PILImage, ImageDraw, ImageFont
 import streamlit as st
@@ -157,13 +158,17 @@ def render_logo_sidebar() -> None:
 
 
 def render_cabecalho_modulo(titulo: str, subtitulo: str = "") -> None:
-    col_esq, col_dir = st.columns([4.4, 1.6])
-    with col_esq:
-        st.title(titulo)
-        if subtitulo:
-            st.caption(subtitulo)
-    with col_dir:
-        st.image(obter_logo_bytes(), use_container_width=True)
+    logo_b64 = base64.b64encode(obter_logo_bytes()).decode("utf-8")
+    st.markdown(
+        f"""
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; margin-bottom: 12px;">
+            <img src="data:image/png;base64,{logo_b64}" alt="GLOBEX MULTIMODAL" style="max-height: 82px; width: auto; object-fit: contain; margin-bottom: 6px;" />
+            <h1 style="margin: 4px 0 0 0; font-size: 2rem; font-weight: 700; color: #1E293B;">{titulo}</h1>
+            {f'<p style="margin: 4px 0 0 0; font-size: 0.9rem; color: #64748B;">{subtitulo}</p>' if subtitulo else ''}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def gerar_pdf_historico_colaborador(
