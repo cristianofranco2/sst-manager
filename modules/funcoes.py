@@ -65,7 +65,7 @@ def render_funcoes() -> None:
                         "ativo": "Status",
                     }
                 )
-                st.dataframe(df_exibir, use_container_width=True)
+                st.dataframe(df_exibir, use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhum cargo cadastrado até o momento.")
         except Exception as e:
