@@ -1,3 +1,4 @@
+from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
@@ -9,6 +10,24 @@ def _buscar_epis() -> list[dict]:
     supabase = get_supabase()
     res = supabase.table("epis").select("*").order("descricao").execute()
     return res.data or []
+
+
+def _formatar_data_br(valor) -> str:
+    if not valor:
+        return "—"
+    if isinstance(valor, datetime):
+        return valor.strftime("%d/%m/%Y")
+    if isinstance(valor, date):
+        return valor.strftime("%d/%m/%Y")
+    texto = str(valor).strip()[:10]
+    if not texto:
+        return "—"
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(texto, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return texto
 
 
 def render_epis() -> None:
@@ -34,6 +53,10 @@ def render_epis() -> None:
             dados = _buscar_epis()
             if dados:
                 df = pd.DataFrame(dados)
+                for col_data in ["data_validade_ca", "validade_ca"]:
+                    if col_data in df.columns:
+                        df[col_data] = df[col_data].map(_formatar_data_br)
+
                 colunas_desejadas = [
                     "codigo_sku",
                     "descricao",
@@ -77,7 +100,7 @@ def render_epis() -> None:
                 modelo = st.text_input("Modelo", placeholder="Ex: Ampla visão / Lente policarbonato")
             with c3:
                 numero_ca = st.text_input("Número do CA *", placeholder="Ex: 15249")
-                data_validade_ca = st.date_input("Data de Validade do CA *")
+                data_validade_ca = st.date_input("Data de Validade do CA *", format="DD/MM/YYYY")
 
             c4, c5, c6 = st.columns(3)
             with c4:
