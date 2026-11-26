@@ -28,7 +28,7 @@ def _buscar_funcoes_ativas() -> list[dict]:
 
 
 def render_colaboradores() -> None:
-    st.title("👥 Gestão de Colaboradores")
+    st.title("👥 Cadastro de Colaborador")
 
     try:
         supabase = get_supabase()
@@ -82,7 +82,7 @@ def render_colaboradores() -> None:
                         "cpf": "CPF",
                         "rg_numero": "RG",
                         "data_nascimento": "Data Nasc.",
-                        "cargo": "Função / Cargo",
+                        "cargo": "Cargo / Função",
                         "cbo": "CBO",
                         "centro_custo": "Centro de Custo",
                         "tipo_contrato": "Contrato",
@@ -105,7 +105,7 @@ def render_colaboradores() -> None:
 
         if nomes_funcoes:
             funcao_selecionada = st.selectbox(
-                "Selecione a Função Cadastrada",
+                "Selecione o Cargo Cadastrado",
                 options=nomes_funcoes,
                 key="select_funcao_colaborador",
             )
@@ -115,8 +115,8 @@ def render_colaboradores() -> None:
             cargo_final = funcao_selecionada
         else:
             st.info(
-                "Nenhuma função ativa encontrada no módulo **Funções**. "
-                "Você pode cadastrar uma lá ou digitar o cargo manualmente abaixo."
+                "Nenhum cargo ativo encontrado no **Cadastro de Cargos**. "
+                "Você pode cadastrar um lá ou digitar o cargo manualmente abaixo."
             )
             cbo_padrao = ""
             setor_padrao = ""
@@ -140,7 +140,7 @@ def render_colaboradores() -> None:
             c4, c5, c6 = st.columns(3)
             with c4:
                 if nomes_funcoes:
-                    st.text_input("Função Selecionada *", value=cargo_final, disabled=True)
+                    st.text_input("Cargo Selecionado *", value=cargo_final, disabled=True)
                     cargo_digitado = cargo_final
                 else:
                     cargo_digitado = st.text_input("Cargo / Função *")
