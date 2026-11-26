@@ -9,6 +9,7 @@ from ui_components import render_cabecalho_modulo
 DATA_MIN_CALENDARIO = date(1900, 1, 1)
 DATA_MAX_CALENDARIO = date(2100, 12, 31)
 COLUNAS_OBRIGATORIAS_EPI = {"numero_ca"}
+CHAVE_MSG_EPI = "msg_feedback_cadastro_epi"
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -138,8 +139,25 @@ def _inserir_entrada_inicial_inventario(
     return False, "Não foi possível inserir a entrada inicial no inventário."
 
 
+def _exibir_mensagem_pendente() -> None:
+    msg_info = st.session_state.pop(CHAVE_MSG_EPI, None)
+    if not msg_info:
+        return
+    tipo = msg_info.get("tipo", "success")
+    texto = msg_info.get("texto", "")
+    if not texto:
+        return
+    if tipo == "warning":
+        st.warning(texto)
+    elif tipo == "error":
+        st.error(texto)
+    else:
+        st.success(texto)
+
+
 def render_epis() -> None:
     render_cabecalho_modulo("🥽 Cadastro de EPIs")
+    _exibir_mensagem_pendente()
 
     try:
         supabase = get_supabase()
@@ -267,19 +285,25 @@ def render_epis() -> None:
                                     descricao=desc_limpa,
                                 )
                                 if ok_inv:
-                                    st.success(
-                                        f"EPI cadastrado e saldo inicial de {int(qtd_inicial)} un. lançado no Inventário!"
-                                    )
+                                    st.session_state[CHAVE_MSG_EPI] = {
+                                        "tipo": "success",
+                                        "texto": f"EPI '{desc_limpa}' adicionado com sucesso e saldo inicial de {int(qtd_inicial)} un. lançado no Inventário!",
+                                    }
                                 else:
-                                    st.warning(
-                                        f"EPI cadastrado, mas houve um aviso ao lançar saldo inicial no Inventário: {err_inv}"
-                                    )
+                                    st.session_state[CHAVE_MSG_EPI] = {
+                                        "tipo": "warning",
+                                        "texto": f"EPI '{desc_limpa}' adicionado, mas houve um aviso ao lançar saldo inicial no Inventário: {err_inv}",
+                                    }
                             else:
-                                st.warning(
-                                    "EPI cadastrado, mas não foi possível localizar o ID para lançar o saldo inicial no Inventário."
-                                )
+                                st.session_state[CHAVE_MSG_EPI] = {
+                                    "tipo": "warning",
+                                    "texto": f"EPI '{desc_limpa}' adicionado, mas não foi possível localizar o ID para lançar o saldo inicial no Inventário.",
+                                }
                         else:
-                            st.success("EPI cadastrado com sucesso!")
+                            st.session_state[CHAVE_MSG_EPI] = {
+                                "tipo": "success",
+                                "texto": f"EPI '{desc_limpa}' adicionado com sucesso!",
+                            }
 
                         _limpar_cache_epis()
                         st.rerun()
