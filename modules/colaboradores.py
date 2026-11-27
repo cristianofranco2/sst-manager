@@ -173,7 +173,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
     val_cpf = str(colab_editar.get("cpf") or "").strip().upper() if modo_edicao else ""
     val_dt_nasc = _garantir_data_valida(
         _parse_data(colab_editar.get("data_nascimento") or colab_editar.get("data_nasc")) if modo_edicao else None,
-        DATA_MINIMA_PERMITIDA,
+        date(1990, 1, 1),
     )
     val_nome = (
         str(colab_editar.get("nome_completo") or colab_editar.get("nome") or "").strip().upper()
