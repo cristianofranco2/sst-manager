@@ -101,7 +101,7 @@ def _indicador_vencimento(data_venc_raw, hoje: date | None = None) -> tuple[str,
     ref_hoje = hoje or date.today()
     dt_venc = _parse_data(data_venc_raw)
     if dt_venc is None:
-        return "🔴", "VENCIDO"
+        return "🔴", "PENDENTE"
 
     dias_restantes = (dt_venc - ref_hoje).days
     if dias_restantes < 0:
@@ -517,48 +517,26 @@ def _montar_historico_colaborador(
             "Detalhes": det_ex,
         })
 
-    # Treinamentos: diretos do colaborador, vinculados à função/cargo ou gerais sem colaborador_id
-    refs_norm = {_normalizar(k) for k in (refs_trein or {}).keys() if _normalizar(k)}
-    trein_selecionados: list[dict] = []
-    vistos_tr: set[str] = set()
-
+    # Treinamentos concluídos/renovados diretamente vinculados ao colaborador
     for tr in treinamentos:
         tr_cid = str(tr.get("colaborador_id") or "").strip()
-        tr_fid = str(tr.get("funcao_id") or tr.get("cargo_id") or "").strip()
-        tr_fnome = _normalizar(tr.get("funcao") or tr.get("cargo") or tr.get("nome_funcao") or tr.get("nome_cargo"))
-        nome_tr = _nome_treinamento(tr)
-        tr_id = str(tr.get("id") or "").strip()
-
-        match_colab = bool(tr_cid and tr_cid == colab_id)
-        match_func = bool(
-            (funcao_id and tr_fid and tr_fid == funcao_id)
-            or (nome_funcao and nome_funcao != "—" and tr_fnome and tr_fnome == _normalizar(nome_funcao))
-        )
-        match_req = bool(
-            refs_norm and ((tr_id and _normalizar(tr_id) in refs_norm) or (_normalizar(nome_tr) in refs_norm))
-        )
-        match_geral = not tr_cid and not tr_fid and not tr_fnome
-
-        if match_colab or match_func or match_req or match_geral:
-            chave = str(tr.get("id") or f"{_normalizar(nome_tr)}_{tr.get('data_realizacao') or tr.get('data_vencimento') or ''}")
-            if chave not in vistos_tr:
-                vistos_tr.add(chave)
-                trein_selecionados.append(tr)
-
-    for tr in trein_selecionados:
+        if not tr_cid or tr_cid != colab_id:
+            continue
         nome_tr = _nome_treinamento(tr)
         venc_raw = tr.get("data_vencimento") or tr.get("validade")
+        dt_mov_tr = tr.get("data_realizacao") or tr.get("data_conclusao")
+        if not dt_mov_tr and not venc_raw:
+            continue
         bol, rot = _indicador_vencimento(venc_raw)
         det_tr = str(tr.get("observacoes") or tr.get("carga_horaria") or "").strip().upper()
         if not det_tr:
             det_tr = f"TREINAMENTO REALIZADO / RENOVADO (VENC.: {_formatar_data_br(venc_raw)})"
-        dt_mov_tr = tr.get("data_realizacao") or tr.get("data_conclusao") or tr.get("created_at") or venc_raw
         itens.append({
             "Colaborador": nome_colab,
             "Categoria": "TREINAMENTOS",
             "Tipo": "RENOVAÇÃO DE TREINAMENTO",
             "Item": nome_tr,
-            "Data": _formatar_data_br(dt_mov_tr),
+            "Data": _formatar_data_br(dt_mov_tr or venc_raw),
             "Vencimento": _formatar_data_br(venc_raw),
             "Status": f"{bol} {rot}",
             "Detalhes": det_tr,
@@ -662,7 +640,6 @@ def _gerar_pdf_auditoria_bytes(resumo_colab: dict, linhas_historico: list[dict])
             cmds.append(f"q {logo_draw_w:.2f} 0 0 {logo_draw_h:.2f} {x_left:.2f} {y_img:.2f} cm /ImLogo Do Q")
             return
 
-        # Fallback tipográfico caso o arquivo de imagem não esteja na pasta do app
         cmds.append("0.04 0.22 0.33 rg")
         cmds.append(f"BT /F2 13 Tf {x_left:.1f} {y_top - 11:.1f} Td ({_escapar_pdf('GLOBEX')}) Tj ET")
         cmds.append("0.04 0.22 0.33 rg")
@@ -1236,7 +1213,7 @@ def render_relatorio_colaborador() -> None:
                 else:
                     texto_entrega_epi = "—"
                     texto_venc_epi = "🔴 —"
-                    texto_status_epi = "🔴 VENCIDO (SEM ENTREGA)"
+                    texto_status_epi = "🔴 PENDENTE"
 
                 qtd_req = e.get("_qtd_requisito")
                 chave_modal_epi = f"abrir_troca_epi_{colab_sel_id}_{eid}_{idx}"
@@ -1283,6 +1260,7 @@ def render_relatorio_colaborador() -> None:
             tx_info = mapa_tipos_ex.get(tx_id, {})
             combinado = {**tx_info, **ex}
             combinado["Exame"] = _nome_exame(combinado)
+            combinado["_realizado_colab"] = True
             linhas_exames_exibir.append(combinado)
 
         for tx in exames_req:
@@ -1296,8 +1274,14 @@ def render_relatorio_colaborador() -> None:
             if not ja_existe:
                 copia = dict(tx)
                 copia["Exame"] = nome_tx
-                if not copia.get("status"):
-                    copia["status"] = "PENDENTE / REQUISITO DA FUNÇÃO"
+                copia["_realizado_colab"] = False
+                copia.pop("data_realizacao", None)
+                copia.pop("data_exame", None)
+                copia.pop("data_aso", None)
+                copia.pop("data_vencimento", None)
+                copia.pop("proximo_vencimento", None)
+                copia.pop("validade", None)
+                copia["status"] = "PENDENTE"
                 linhas_exames_exibir.append(copia)
 
         if linhas_exames_exibir:
@@ -1310,13 +1294,20 @@ def render_relatorio_colaborador() -> None:
                     or ex_item.get("periodicidade")
                 )
                 per_str = _formatar_periodo_meses(per_raw)
-                dt_real_str = _formatar_data_br(
-                    ex_item.get("data_realizacao") or ex_item.get("data_exame") or ex_item.get("data_aso")
-                )
-                venc_raw = ex_item.get("data_vencimento") or ex_item.get("proximo_vencimento") or ex_item.get("validade")
-                dt_venc_str = _formatar_data_br(venc_raw)
-                bol_ex, rot_ex = _indicador_vencimento(venc_raw)
-                status_ex = str(ex_item.get("status") or ex_item.get("resultado") or rot_ex).upper()
+
+                if ex_item.get("_realizado_colab"):
+                    dt_real_str = _formatar_data_br(
+                        ex_item.get("data_realizacao") or ex_item.get("data_exame") or ex_item.get("data_aso")
+                    )
+                    venc_raw = ex_item.get("data_vencimento") or ex_item.get("proximo_vencimento") or ex_item.get("validade")
+                    dt_venc_str = _formatar_data_br(venc_raw)
+                    bol_ex, rot_ex = _indicador_vencimento(venc_raw)
+                    status_ex = str(ex_item.get("status") or ex_item.get("resultado") or rot_ex).upper()
+                else:
+                    dt_real_str = "—"
+                    dt_venc_str = "—"
+                    bol_ex = "🔴"
+                    status_ex = "PENDENTE"
 
                 chave_modal_ex = f"abrir_ren_exame_{colab_sel_id}_{ex_id}_{idx}"
 
@@ -1377,15 +1368,10 @@ def render_relatorio_colaborador() -> None:
             manter_nao_encontrados=True,
         )
 
-        trein_base_lista = list(trein_vinculados_colab) + list(trein_vinculados_funcao) + list(trein_req)
-        if not trein_base_lista and treinamentos:
-            trein_base_lista = [
-                tr for tr in treinamentos if not str(tr.get("colaborador_id") or "").strip()
-            ]
-
         linhas_trein_exibir: list[dict] = []
         vistos_trein: set[str] = set()
-        for tr in trein_base_lista:
+
+        for tr in trein_vinculados_colab:
             nome_tr = _nome_treinamento(tr)
             chave_tr = _normalizar(nome_tr) if nome_tr != "—" else str(tr.get("id") or id(tr))
             if chave_tr in vistos_trein:
@@ -1393,6 +1379,29 @@ def render_relatorio_colaborador() -> None:
             vistos_trein.add(chave_tr)
             copia = dict(tr)
             copia["Treinamento"] = nome_tr
+            tem_data_tr = bool(
+                _parse_data(tr.get("data_realizacao") or tr.get("data_conclusao"))
+                or _parse_data(tr.get("data_vencimento") or tr.get("validade"))
+            )
+            copia["_realizado_colab"] = tem_data_tr
+            if not tem_data_tr:
+                copia["status"] = "PENDENTE"
+            linhas_trein_exibir.append(copia)
+
+        for tr in list(trein_vinculados_funcao) + list(trein_req):
+            nome_tr = _nome_treinamento(tr)
+            chave_tr = _normalizar(nome_tr) if nome_tr != "—" else str(tr.get("id") or id(tr))
+            if chave_tr in vistos_trein:
+                continue
+            vistos_trein.add(chave_tr)
+            copia = dict(tr)
+            copia["Treinamento"] = nome_tr
+            copia["_realizado_colab"] = False
+            copia.pop("data_realizacao", None)
+            copia.pop("data_conclusao", None)
+            copia.pop("data_vencimento", None)
+            copia.pop("validade", None)
+            copia["status"] = "PENDENTE"
             linhas_trein_exibir.append(copia)
 
         if linhas_trein_exibir:
@@ -1400,11 +1409,18 @@ def render_relatorio_colaborador() -> None:
                 tr_id = str(tr_item.get("id") or idx).strip()
                 nome_tr = str(tr_item.get("Treinamento") or _nome_treinamento(tr_item)).upper()
                 per_tr_str = _formatar_periodo_meses(tr_item.get("validade_meses") or tr_item.get("periodicidade_meses"))
-                real_tr_str = _formatar_data_br(tr_item.get("data_realizacao") or tr_item.get("data_conclusao"))
-                venc_raw_tr = tr_item.get("data_vencimento") or tr_item.get("validade")
-                venc_tr_str = _formatar_data_br(venc_raw_tr)
-                bol_tr, rot_tr = _indicador_vencimento(venc_raw_tr)
-                status_tr = str(tr_item.get("status") or rot_tr).upper()
+
+                if tr_item.get("_realizado_colab"):
+                    real_tr_str = _formatar_data_br(tr_item.get("data_realizacao") or tr_item.get("data_conclusao"))
+                    venc_raw_tr = tr_item.get("data_vencimento") or tr_item.get("validade")
+                    venc_tr_str = _formatar_data_br(venc_raw_tr)
+                    bol_tr, rot_tr = _indicador_vencimento(venc_raw_tr)
+                    status_tr = str(tr_item.get("status") or rot_tr).upper()
+                else:
+                    real_tr_str = "—"
+                    venc_tr_str = "—"
+                    bol_tr = "🔴"
+                    status_tr = "PENDENTE"
 
                 chave_modal_tr = f"abrir_ren_trein_{colab_sel_id}_{tr_id}_{idx}"
 
