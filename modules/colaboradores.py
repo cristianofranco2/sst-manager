@@ -6,6 +6,7 @@ from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
 CHAVE_MSG_COLABORADOR = "msg_feedback_colaborador"
+DATA_MINIMA_PERMITIDA = date(1990, 1, 1)
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -57,6 +58,11 @@ def _parse_data(valor) -> date | None:
 def _formatar_data_br(valor) -> str:
     dt = _parse_data(valor)
     return dt.strftime("%d/%m/%Y") if dt else "—"
+
+
+def _garantir_data_minima(dt: date | None, padrao: date) -> date:
+    base = dt or padrao
+    return base if base >= DATA_MINIMA_PERMITIDA else DATA_MINIMA_PERMITIDA
 
 
 def _extrair_coluna_pgrst204(msg: str) -> str | None:
@@ -118,6 +124,7 @@ def _nome_cargo_item(c: dict) -> str:
 def render_formulario_colaborador(supabase, colab_editar: dict | None = None, cargos: list[dict] = []):
     modo_edicao = colab_editar is not None
     colab_id = str(colab_editar.get("id") or "").strip() if modo_edicao else None
+    hoje_dt = date.today()
 
     opcoes_cargos = []
     for c in cargos:
@@ -164,10 +171,9 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
 
     val_mat = str(colab_editar.get("matricula") or "").strip().upper() if modo_edicao else ""
     val_cpf = str(colab_editar.get("cpf") or "").strip().upper() if modo_edicao else ""
-    val_dt_nasc = (
-        _parse_data(colab_editar.get("data_nascimento") or colab_editar.get("data_nasc")) or date(1990, 1, 1)
-        if modo_edicao
-        else date(1990, 1, 1)
+    val_dt_nasc = _garantir_data_minima(
+        _parse_data(colab_editar.get("data_nascimento") or colab_editar.get("data_nasc")) if modo_edicao else None,
+        DATA_MINIMA_PERMITIDA,
     )
     val_nome = (
         str(colab_editar.get("nome_completo") or colab_editar.get("nome") or "").strip().upper()
@@ -193,10 +199,9 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         if modo_edicao
         else ""
     )
-    val_dt_adm = (
-        _parse_data(colab_editar.get("data_admissao") or colab_editar.get("admissao")) or date.today()
-        if modo_edicao
-        else date.today()
+    val_dt_adm = _garantir_data_minima(
+        _parse_data(colab_editar.get("data_admissao") or colab_editar.get("admissao")) if modo_edicao else None,
+        hoje_dt,
     )
     val_setor = (
         str(colab_editar.get("setor") or colab_editar.get("centro_custo") or "OPERAÇÃO").strip().upper()
@@ -238,7 +243,12 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         with cp2:
             cpf = st.text_input("CPF * (somente números)", value=val_cpf, placeholder="EX: 00000000000")
         with cp3:
-            dt_nasc = st.date_input("Data de Nascimento", value=val_dt_nasc, format="DD/MM/YYYY")
+            dt_nasc = st.date_input(
+                "Data de Nascimento",
+                value=val_dt_nasc,
+                min_value=DATA_MINIMA_PERMITIDA,
+                format="DD/MM/YYYY",
+            )
 
         cp4, cp5, cp6 = st.columns(3)
         with cp4:
@@ -262,7 +272,12 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         with cd2:
             st.text_input("CBO", value=cbo_auto, disabled=True)
         with cd3:
-            dt_admissao = st.date_input("Data de Admissão", value=val_dt_adm, format="DD/MM/YYYY")
+            dt_admissao = st.date_input(
+                "Data de Admissão",
+                value=val_dt_adm,
+                min_value=DATA_MINIMA_PERMITIDA,
+                format="DD/MM/YYYY",
+            )
 
         cd4, cd5, cd6 = st.columns(3)
         with cd4:
@@ -435,3 +450,4 @@ def render_colaboradores() -> None:
 
 
 render_colaboradores = render_colaboradores
+```[cite: 14]
