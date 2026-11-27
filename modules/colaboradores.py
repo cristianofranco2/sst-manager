@@ -181,46 +181,6 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
     )
     st.subheader(titulo_form)
 
-    chave_sel_funcao = f"sel_funcao_colab_{sufixo_key}"
-    chave_cbo_input = f"cbo_livre_colab_{sufixo_key}"
-    chave_ultimo_funcao = f"_ultima_funcao_sel_{sufixo_key}"
-
-    if opcoes_funcoes:
-        funcao_sel_id = st.selectbox(
-            "Selecione o Cargo / Função *",
-            options=[o[0] for o in opcoes_funcoes],
-            index=idx_funcao_padrao,
-            format_func=lambda fid: next(
-                (f"{o[1]} (CBO {o[2]})" if o[2] else o[1] for o in opcoes_funcoes if o[0] == fid),
-                fid,
-            ),
-            key=chave_sel_funcao,
-        )
-        sel_funcao = next((o for o in opcoes_funcoes if o[0] == funcao_sel_id), ("", "", "", ""))
-        nome_funcao_sel = sel_funcao[1]
-        cbo_da_funcao = sel_funcao[2]
-        setor_da_funcao = sel_funcao[3]
-    else:
-        funcao_sel_id = None
-        nome_funcao_sel = (
-            str(colab_editar.get("cargo") or colab_editar.get("funcao") or "").strip().upper()
-            if modo_edicao
-            else ""
-        )
-        cbo_da_funcao = _cbo_funcao_item(colab_editar) if modo_edicao else ""
-        setor_da_funcao = ""
-        st.info("Nenhuma função cadastrada em Cadastro de Cargos.")
-
-    if st.session_state.get(chave_ultimo_funcao) != funcao_sel_id:
-        st.session_state[chave_ultimo_funcao] = funcao_sel_id
-        cbo_base = cbo_da_funcao or (_cbo_funcao_item(colab_editar) if modo_edicao else "")
-        st.session_state[chave_cbo_input] = cbo_base
-
-    if chave_cbo_input not in st.session_state:
-        st.session_state[chave_cbo_input] = (
-            cbo_da_funcao or (_cbo_funcao_item(colab_editar) if modo_edicao else "")
-        )
-
     val_mat = str(colab_editar.get("matricula") or "").strip().upper() if modo_edicao else ""
     val_cpf = str(colab_editar.get("cpf") or "").strip().upper() if modo_edicao else ""
     val_dt_nasc = _garantir_data_valida(
@@ -259,11 +219,10 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
         str(
             colab_editar.get("setor")
             or colab_editar.get("centro_custo")
-            or setor_da_funcao
             or "OPERAÇÃO"
         ).strip().upper()
         if modo_edicao
-        else (setor_da_funcao or "OPERAÇÃO")
+        else "OPERAÇÃO"
     )
     val_contrato = (
         str(colab_editar.get("tipo_contrato") or colab_editar.get("contrato") or "CLT").strip().upper()
@@ -291,6 +250,9 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
         if modo_edicao
         else ""
     )
+    val_cbo_colab = _cbo_funcao_item(colab_editar) if modo_edicao else ""
+
+    chave_cbo_input = f"cbo_livre_colab_{sufixo_key}"
 
     with st.form(f"form_colaborador_{sufixo_key}"):
         st.markdown("##### 📄 Dados Pessoais e Identificação")
@@ -326,15 +288,34 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
 
         cd1, cd2, cd3 = st.columns(3)
         with cd1:
-            st.text_input(
-                "Cargo / Função Selecionado *",
-                value=nome_funcao_sel or "—",
-                disabled=True,
-            )
+            if opcoes_funcoes:
+                funcao_sel_id = st.selectbox(
+                    "Cargo / Função *",
+                    options=[o[0] for o in opcoes_funcoes],
+                    index=idx_funcao_padrao,
+                    format_func=lambda fid: next(
+                        (f"{o[1]} (CBO {o[2]})" if o[2] else o[1] for o in opcoes_funcoes if o[0] == fid),
+                        fid,
+                    ),
+                )
+                sel_funcao = next((o for o in opcoes_funcoes if o[0] == funcao_sel_id), ("", "", "", ""))
+                nome_funcao_sel = sel_funcao[1]
+                cbo_da_funcao = sel_funcao[2]
+            else:
+                funcao_sel_id = None
+                nome_funcao_sel = (
+                    str(colab_editar.get("cargo") or colab_editar.get("funcao") or "").strip().upper()
+                    if modo_edicao
+                    else ""
+                )
+                cbo_da_funcao = ""
         with cd2:
+            cbo_padrao = cbo_da_funcao or val_cbo_colab
             cbo_livre = st.text_input(
                 "CBO (opcional)",
-                key=chave_cbo_input,
+                value=st.session_state.get(chave_cbo_input, cbo_padrao)
+                if st.session_state.get(chave_cbo_input) is not None
+                else cbo_padrao,
                 placeholder="EX: 7822-20",
             )
         with cd3:
