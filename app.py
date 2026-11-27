@@ -8,6 +8,7 @@ from modules.matriz_funcao import render_matriz_funcao, render_voltar_matriz_se_
 from modules.relatorio_colaborador import render_relatorio_colaborador
 from modules.tipos_exames import render_tipos_exames
 from modules.treinamentos import render_treinamentos
+from modules.uniformes import render_uniformes
 from ui_components import render_logo_sidebar
 
 st.set_page_config(
@@ -22,6 +23,7 @@ OPCOES_MENU = [
     "💼 Cadastro de Cargos",
     "👥 Cadastro de Colaborador",
     "🥽 Cadastro de EPIs",
+    "👕 Cadastro de Uniformes",
     "📦 Cadastro de Inventário",
     "📋 Cadastro de Exames",
     "🎓 Cadastro de Treinamentos",
@@ -63,6 +65,9 @@ def main() -> None:
     elif menu == "🥽 Cadastro de EPIs":
         render_voltar_matriz_se_necessario()
         render_epis()
+    elif menu == "👕 Cadastro de Uniformes":
+        render_voltar_matriz_se_necessario()
+        render_uniformes()
     elif menu == "📦 Cadastro de Inventário":
         render_voltar_matriz_se_necessario()
         render_inventario()
