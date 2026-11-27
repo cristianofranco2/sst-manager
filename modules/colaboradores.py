@@ -55,11 +55,6 @@ def _parse_data(valor) -> date | None:
     return None
 
 
-def _formatar_data_br(valor) -> str:
-    dt = _parse_data(valor)
-    return dt.strftime("%d/%m/%Y") if dt else "—"
-
-
 def _garantir_data_minima(dt: date | None, padrao: date) -> date:
     base = dt or padrao
     return base if base >= DATA_MINIMA_PERMITIDA else DATA_MINIMA_PERMITIDA
@@ -143,9 +138,9 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
                 break
 
     titulo_form = (
-        f"✏️ EDITANDO COLABORADOR: {str(colab_editar.get('nome_completo') or colab_editar.get('nome') or '').strip().upper()}"
+        f"EDITANDO COLABORADOR: {str(colab_editar.get('nome_completo') or colab_editar.get('nome') or '').strip().upper()}"
         if modo_edicao
-        else "📝 FICHA COMPLETA DE CADASTRO DO COLABORADOR"
+        else "FICHA COMPLETA DE CADASTRO DO COLABORADOR"
     )
     st.subheader(titulo_form)
 
@@ -236,7 +231,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
     )
 
     with st.form(f"form_colaborador_{colab_id or 'novo'}"):
-        st.markdown("##### 📄 Dados Pessoais e Identificação")
+        st.markdown("##### Dados Pessoais e Identificação")
         cp1, cp2, cp3 = st.columns(3)
         with cp1:
             matricula = st.text_input("Matrícula *", value=val_mat, placeholder="EX: 123")
@@ -264,7 +259,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
             )
 
         st.markdown("---")
-        st.markdown("##### 🏢 Dados Profissionais e Alocação")
+        st.markdown("##### Dados Profissionais e Alocação")
 
         cd1, cd2, cd3 = st.columns(3)
         with cd1:
@@ -310,14 +305,14 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
             )
 
         st.markdown("---")
-        st.markdown("##### 📞 Contato e Comunicação")
+        st.markdown("##### Contato e Comunicação")
         cc1, cc2 = st.columns(2)
         with cc1:
             email = st.text_input("E-mail", value=val_email, placeholder="COLABORADOR@GLOBEXMULTIMODAL.COM.BR")
         with cc2:
             telefone = st.text_input("Telefone / WhatsApp", value=val_tel, placeholder="(19) 99999-9999")
 
-        btn_rotulo = "💾 Salvar Alterações" if modo_edicao else "💾 Cadastrar Colaborador"
+        btn_rotulo = "Salvar Alterações" if modo_edicao else "Cadastrar Colaborador"
         if st.form_submit_button(btn_rotulo):
             mat_aloc_limpa = num_matricula_aloc.strip().upper()
             mat_limpa = (matricula.strip() or mat_aloc_limpa).upper()
@@ -372,7 +367,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
 
 
 def render_colaboradores() -> None:
-    render_cabecalho_modulo("👥 Cadastro de Colaborador")
+    render_cabecalho_modulo("Cadastro de Colaborador")
     _exibir_mensagem_pendente()
 
     try:
@@ -385,8 +380,8 @@ def render_colaboradores() -> None:
     colaboradores = _buscar_tabela("colaboradores")
 
     tab1, tab2 = st.tabs([
-        "📋 Listar / Gerenciar Colaboradores",
-        "➕ Cadastrar Novo Colaborador",
+        "Listar / Gerenciar Colaboradores",
+        "Cadastrar Novo Colaborador",
     ])
 
     with tab1:
@@ -394,7 +389,7 @@ def render_colaboradores() -> None:
         with col_t:
             st.subheader("Colaboradores Cadastrados")
         with col_b:
-            if st.button("🔄 Atualizar lista", key="btn_atualizar_colabs", use_container_width=True):
+            if st.button("Atualizar lista", key="btn_atualizar_colabs", use_container_width=True):
                 _limpar_cache_colaboradores()
                 st.rerun()
 
@@ -436,7 +431,7 @@ def render_colaboradores() -> None:
                     c_cols[7].markdown(f"**Status:**  \n{status_str}")
 
                     chave_edicao = f"editar_colab_{cid}"
-                    if c_cols[8].button("✏️ Editar", key=f"btn_{chave_edicao}", use_container_width=True):
+                    if c_cols[8].button("Editar", key=f"btn_{chave_edicao}", use_container_width=True):
                         st.session_state[chave_edicao] = not st.session_state.get(chave_edicao, False)
 
                     if st.session_state.get(chave_edicao, False):
@@ -447,7 +442,3 @@ def render_colaboradores() -> None:
 
     with tab2:
         render_formulario_colaborador(supabase, colab_editar=None, cargos=cargos)
-
-
-render_colaboradores = render_colaboradores
-```[cite: 14]
