@@ -5,6 +5,10 @@ from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
 
+def _para_maiusculo(texto: str | None) -> str:
+    return " ".join(str(texto or "").strip().upper().split())
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _buscar_funcoes() -> list[dict]:
     supabase = get_supabase()
@@ -38,13 +42,14 @@ def render_funcoes() -> None:
         with col_acao:
             if st.button("🔄 Atualizar lista", key="btn_atualizar_funcoes", use_container_width=True):
                 _buscar_funcoes.clear()
+                st.rerun()
 
         try:
             dados = _buscar_funcoes()
             if dados:
                 df = pd.DataFrame(dados)
                 if "ativo" in df.columns:
-                    df["ativo"] = df["ativo"].map(lambda v: "Ativo" if v else "Inativo")
+                    df["ativo"] = df["ativo"].map(lambda v: "ATIVO" if bool(v) else "INATIVO")
 
                 colunas_desejadas = [
                     "nome_funcao",
@@ -55,6 +60,10 @@ def render_funcoes() -> None:
                     "ativo",
                 ]
                 colunas_existentes = [c for c in colunas_desejadas if c in df.columns]
+
+                for col in colunas_existentes:
+                    if col != "ativo":
+                        df[col] = df[col].map(lambda v: _para_maiusculo(v) if v is not None else "")
 
                 df_exibir = df[colunas_existentes].rename(
                     columns={
@@ -113,15 +122,19 @@ def render_funcoes() -> None:
                 else:
                     try:
                         nova_funcao = {
-                            "nome_funcao": nome_funcao.strip(),
-                            "cbo": cbo.strip(),
-                            "setor_padrao": setor_padrao.strip(),
-                            "descricao_atividades": descricao_atividades.strip(),
-                            "riscos_principais": riscos_principais.strip(),
+                            "nome_funcao": _para_maiusculo(nome_funcao),
+                            "cbo": _para_maiusculo(cbo),
+                            "setor_padrao": _para_maiusculo(setor_padrao),
+                            "descricao_atividades": _para_maiusculo(descricao_atividades),
+                            "riscos_principais": _para_maiusculo(riscos_principais),
                             "ativo": bool(ativo),
                         }
                         supabase.table("funcoes").insert(nova_funcao).execute()
                         _buscar_funcoes.clear()
                         st.success("Cargo cadastrado com sucesso!")
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao salvar cargo no Supabase: {e}")
+
+
+render_funcoes = render_funcoes
