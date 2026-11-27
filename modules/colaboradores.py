@@ -9,19 +9,8 @@ CHAVE_MSG_COLABORADOR = "msg_feedback_colaborador"
 DATA_MINIMA_PERMITIDA = date(1930, 1, 1)
 DATA_MAXIMA_PERMITIDA = date(2099, 12, 31)
 
-TABELAS_CARGOS_CANDIDATAS = [
-    "cargos",
-    "funcoes",
-    "funcoes_cargos",
-    "cadastro_cargos",
-    "cadastro_funcoes",
-    "cargo_funcao",
-    "cargos_funcoes",
-    "roles",
-]
 
-
-@st.cache_data(ttl=10, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def _buscar_tabela(nome_tabela: str) -> list[dict]:
     supabase = get_supabase()
     try:
@@ -31,12 +20,19 @@ def _buscar_tabela(nome_tabela: str) -> list[dict]:
         return []
 
 
-def _buscar_cargos_e_origem() -> tuple[list[dict], str]:
-    for tabela in TABELAS_CARGOS_CANDIDATAS:
-        dados = _buscar_tabela(tabela)
-        if dados:
-            return dados, tabela
-    return [], ""
+@st.cache_data(ttl=60, show_spinner=False)
+def _buscar_funcoes_cadastradas() -> list[dict]:
+    supabase = get_supabase()
+    try:
+        res = (
+            supabase.table("funcoes")
+            .select("id, nome_funcao, cbo, setor_padrao, ativo")
+            .order("nome_funcao")
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        return _buscar_tabela("funcoes")
 
 
 def _limpar_cache_colaboradores() -> None:
@@ -132,46 +128,50 @@ def _exibir_mensagem_pendente() -> None:
         st.success(texto)
 
 
-def _nome_cargo_item(c: dict) -> str:
-    for k in (
-        "nome",
-        "nome_cargo",
-        "nome_funcao",
-        "cargo",
-        "funcao",
-        "titulo",
-        "descricao",
-    ):
-        v = str(c.get(k) or "").strip()
-        if v:
-            return " ".join(v.upper().split())
+def _nome_funcao_item(f: dict) -> str:
+    v = str(f.get("nome_funcao") or "").strip()
+    return " ".join(v.upper().split()) if v else ""
+
+
+def _cbo_funcao_item(f: dict) -> str:
+    v = " ".join(str(f.get("cbo") or "").strip().upper().split())
+    if v and v not in ("—", "-", "NONE", "NULL", "N/A"):
+        return v
     return ""
 
 
-def render_formulario_colaborador(supabase, colab_editar: dict | None = None, cargos: list[dict] = []):
+def render_formulario_colaborador(supabase, colab_editar: dict | None = None, funcoes: list[dict] = []):
     modo_edicao = colab_editar is not None
     colab_id = str(colab_editar.get("id") or "").strip() if modo_edicao else None
+    sufixo_key = colab_id or "novo"
     hoje_dt = date.today()
 
-    opcoes_cargos = []
-    for idx, c in enumerate(cargos):
-        cid = str(c.get("id") or c.get("uuid") or c.get("codigo") or idx).strip()
-        nome_c = _nome_cargo_item(c)
-        cbo_c = str(c.get("cbo") or c.get("codigo_cbo") or "").strip().upper()
-        if nome_c:
-            opcoes_cargos.append((cid, nome_c, cbo_c))
+    funcoes_ativas = [
+        f for f in funcoes
+        if f.get("ativo", True) is not False and _nome_funcao_item(f)
+    ] or [f for f in funcoes if _nome_funcao_item(f)]
 
-    idx_cargo_padrao = 0
-    if modo_edicao and opcoes_cargos:
-        cid_atual = str(
-            colab_editar.get("cargo_id")
-            or colab_editar.get("funcao_id")
+    opcoes_funcoes = [
+        (
+            str(f.get("id") or idx).strip(),
+            _nome_funcao_item(f),
+            _cbo_funcao_item(f),
+            " ".join(str(f.get("setor_padrao") or "").strip().upper().split()),
+        )
+        for idx, f in enumerate(funcoes_ativas)
+    ]
+
+    idx_funcao_padrao = 0
+    if modo_edicao and opcoes_funcoes:
+        fid_atual = str(
+            colab_editar.get("funcao_id")
+            or colab_editar.get("cargo_id")
             or ""
         ).strip()
         nome_atual = _normalizar(colab_editar.get("cargo") or colab_editar.get("funcao"))
-        for i, (cid, nome_c, _) in enumerate(opcoes_cargos):
-            if (cid and cid == cid_atual) or (nome_atual and _normalizar(nome_c) == nome_atual):
-                idx_cargo_padrao = i
+        for i, (fid, nome_f, _, _) in enumerate(opcoes_funcoes):
+            if (fid and fid == fid_atual) or (nome_atual and _normalizar(nome_f) == nome_atual):
+                idx_funcao_padrao = i
                 break
 
     titulo_form = (
@@ -180,6 +180,46 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         else "FICHA COMPLETA DE CADASTRO DO COLABORADOR"
     )
     st.subheader(titulo_form)
+
+    chave_sel_funcao = f"sel_funcao_colab_{sufixo_key}"
+    chave_cbo_input = f"cbo_livre_colab_{sufixo_key}"
+    chave_ultimo_funcao = f"_ultima_funcao_sel_{sufixo_key}"
+
+    if opcoes_funcoes:
+        funcao_sel_id = st.selectbox(
+            "Selecione o Cargo / Função *",
+            options=[o[0] for o in opcoes_funcoes],
+            index=idx_funcao_padrao,
+            format_func=lambda fid: next(
+                (f"{o[1]} (CBO {o[2]})" if o[2] else o[1] for o in opcoes_funcoes if o[0] == fid),
+                fid,
+            ),
+            key=chave_sel_funcao,
+        )
+        sel_funcao = next((o for o in opcoes_funcoes if o[0] == funcao_sel_id), ("", "", "", ""))
+        nome_funcao_sel = sel_funcao[1]
+        cbo_da_funcao = sel_funcao[2]
+        setor_da_funcao = sel_funcao[3]
+    else:
+        funcao_sel_id = None
+        nome_funcao_sel = (
+            str(colab_editar.get("cargo") or colab_editar.get("funcao") or "").strip().upper()
+            if modo_edicao
+            else ""
+        )
+        cbo_da_funcao = _cbo_funcao_item(colab_editar) if modo_edicao else ""
+        setor_da_funcao = ""
+        st.info("Nenhuma função cadastrada em Cadastro de Cargos.")
+
+    if st.session_state.get(chave_ultimo_funcao) != funcao_sel_id:
+        st.session_state[chave_ultimo_funcao] = funcao_sel_id
+        cbo_base = cbo_da_funcao or (_cbo_funcao_item(colab_editar) if modo_edicao else "")
+        st.session_state[chave_cbo_input] = cbo_base
+
+    if chave_cbo_input not in st.session_state:
+        st.session_state[chave_cbo_input] = (
+            cbo_da_funcao or (_cbo_funcao_item(colab_editar) if modo_edicao else "")
+        )
 
     val_mat = str(colab_editar.get("matricula") or "").strip().upper() if modo_edicao else ""
     val_cpf = str(colab_editar.get("cpf") or "").strip().upper() if modo_edicao else ""
@@ -216,9 +256,14 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         hoje_dt,
     )
     val_setor = (
-        str(colab_editar.get("setor") or colab_editar.get("centro_custo") or "OPERAÇÃO").strip().upper()
+        str(
+            colab_editar.get("setor")
+            or colab_editar.get("centro_custo")
+            or setor_da_funcao
+            or "OPERAÇÃO"
+        ).strip().upper()
         if modo_edicao
-        else "OPERAÇÃO"
+        else (setor_da_funcao or "OPERAÇÃO")
     )
     val_contrato = (
         str(colab_editar.get("tipo_contrato") or colab_editar.get("contrato") or "CLT").strip().upper()
@@ -246,18 +291,8 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         if modo_edicao
         else ""
     )
-    val_cargo_colab = (
-        str(colab_editar.get("cargo") or colab_editar.get("funcao") or "").strip().upper()
-        if modo_edicao
-        else ""
-    )
-    val_cbo_colab = (
-        str(colab_editar.get("cbo") or "").strip().upper()
-        if modo_edicao
-        else ""
-    )
 
-    with st.form(f"form_colaborador_{colab_id or 'novo'}"):
+    with st.form(f"form_colaborador_{sufixo_key}"):
         st.markdown("##### 📄 Dados Pessoais e Identificação")
         cp1, cp2, cp3 = st.columns(3)
         with cp1:
@@ -291,32 +326,16 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
 
         cd1, cd2, cd3 = st.columns(3)
         with cd1:
-            if opcoes_cargos:
-                cargo_sel_id = st.selectbox(
-                    "Cargo / Função *",
-                    options=[o[0] for o in opcoes_cargos],
-                    index=idx_cargo_padrao,
-                    format_func=lambda cid: next(
-                        (f"{o[1]} (CBO {o[2]})" if o[2] else o[1] for o in opcoes_cargos if o[0] == cid),
-                        cid,
-                    ),
-                )
-                sel_tuple = next((o for o in opcoes_cargos if o[0] == cargo_sel_id), ("", "", ""))
-                nome_cargo_final = sel_tuple[1]
-                cbo_padrao_cargo = sel_tuple[2]
-            else:
-                cargo_sel_id = None
-                nome_cargo_final = st.text_input(
-                    "Cargo / Função *",
-                    value=val_cargo_colab,
-                    placeholder="EX: CONFERENTE, OPERADOR DE EMPILHADEIRA",
-                )
-                cbo_padrao_cargo = ""
+            st.text_input(
+                "Cargo / Função Selecionado *",
+                value=nome_funcao_sel or "—",
+                disabled=True,
+            )
         with cd2:
             cbo_livre = st.text_input(
                 "CBO (opcional)",
-                value=val_cbo_colab or cbo_padrao_cargo,
-                placeholder="EX: 414105",
+                key=chave_cbo_input,
+                placeholder="EX: 7822-20",
             )
         with cd3:
             dt_admissao = st.date_input(
@@ -370,13 +389,13 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
             mat_aloc_limpa = num_matricula_aloc.strip().upper()
             mat_limpa = (matricula.strip() or mat_aloc_limpa).upper()
             nome_limpo = " ".join(nome_completo.strip().upper().split())
-            cargo_limpo = " ".join(str(nome_cargo_final or "").strip().upper().split())
-            cbo_limpo = " ".join(cbo_livre.strip().upper().split())
+            funcao_limpa = " ".join(nome_funcao_sel.strip().upper().split())
+            cbo_limpo = _cbo_funcao_item({"cbo": cbo_livre})
 
             if not mat_limpa or not nome_limpo:
                 st.warning("Preencha os campos obrigatórios: Matrícula e Nome Completo.")
-            elif not cargo_limpo:
-                st.warning("Selecione ou informe o Cargo / Função do colaborador.")
+            elif not funcao_limpa:
+                st.warning("Selecione um Cargo / Função válido.")
             else:
                 try:
                     mat_final = mat_aloc_limpa or mat_limpa
@@ -390,10 +409,10 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
                         "nome": nome_limpo,
                         "rg": rg.strip().upper(),
                         "genero": genero.strip().upper(),
-                        "cargo_id": cargo_sel_id,
-                        "funcao_id": cargo_sel_id,
-                        "cargo": cargo_limpo,
-                        "funcao": cargo_limpo,
+                        "funcao_id": funcao_sel_id,
+                        "cargo_id": funcao_sel_id,
+                        "funcao": funcao_limpa,
+                        "cargo": funcao_limpa,
                         "cbo": cbo_limpo,
                         "data_admissao": str(dt_admissao),
                         "admissao": str(dt_admissao),
@@ -433,7 +452,7 @@ def render_colaboradores() -> None:
         st.error(f"Erro ao conectar com o Supabase: {e}")
         return
 
-    cargos, _ = _buscar_cargos_e_origem()
+    funcoes = _buscar_funcoes_cadastradas()
     colaboradores = _buscar_tabela("colaboradores")
 
     tab1, tab2 = st.tabs([
@@ -451,9 +470,9 @@ def render_colaboradores() -> None:
                 st.rerun()
 
         if colaboradores:
-            mapa_cargos = {
-                str(c.get("id") or c.get("uuid") or c.get("codigo") or idx).strip(): c
-                for idx, c in enumerate(cargos)
+            mapa_funcoes = {
+                str(f.get("id") or idx).strip(): f
+                for idx, f in enumerate(funcoes)
             }
 
             for colab in colaboradores:
@@ -462,14 +481,14 @@ def render_colaboradores() -> None:
                 nome_str = str(colab.get("nome_completo") or colab.get("nome") or "—").strip().upper()
                 cpf_str = str(colab.get("cpf") or "—").strip().upper()
 
-                cargo_id = str(colab.get("cargo_id") or colab.get("funcao_id") or "").strip()
-                cargo_info = mapa_cargos.get(cargo_id, {})
-                cargo_str = str(
-                    _nome_cargo_item(cargo_info)
-                    if cargo_info
+                funcao_id = str(colab.get("funcao_id") or colab.get("cargo_id") or "").strip()
+                funcao_info = mapa_funcoes.get(funcao_id, {})
+                funcao_str = str(
+                    _nome_funcao_item(funcao_info)
+                    if funcao_info
                     else (colab.get("cargo") or colab.get("funcao") or "—")
                 ).strip().upper()
-                cbo_str = str(colab.get("cbo") or cargo_info.get("cbo") or "—").strip().upper()
+                cbo_str = _cbo_funcao_item(colab) or _cbo_funcao_item(funcao_info) or "—"
 
                 setor_str = str(colab.get("setor") or colab.get("centro_custo") or "—").strip().upper()
                 num_mat_str = str(
@@ -485,7 +504,7 @@ def render_colaboradores() -> None:
                     c_cols[1].markdown(f"**Nome:**  \n{nome_str}")
                     c_cols[2].markdown(f"**CPF:**  \n{cpf_str}")
                     c_cols[3].markdown(f"**Nº Matrícula:**  \n{num_mat_str}")
-                    c_cols[4].markdown(f"**Cargo / Função:**  \n{cargo_str}")
+                    c_cols[4].markdown(f"**Cargo / Função:**  \n{funcao_str}")
                     c_cols[5].markdown(f"**CBO:**  \n{cbo_str}")
                     c_cols[6].markdown(f"**Setor:**  \n{setor_str}")
                     c_cols[7].markdown(f"**Status:**  \n{status_str}")
@@ -496,12 +515,12 @@ def render_colaboradores() -> None:
 
                     if st.session_state.get(chave_edicao, False):
                         with st.container(border=True):
-                            render_formulario_colaborador(supabase, colab_editar=colab, cargos=cargos)
+                            render_formulario_colaborador(supabase, colab_editar=colab, funcoes=funcoes)
         else:
             st.info("Nenhum colaborador cadastrado.")
 
     with tab2:
-        render_formulario_colaborador(supabase, colab_editar=None, cargos=cargos)
+        render_formulario_colaborador(supabase, colab_editar=None, funcoes=funcoes)
 
 
 render_colaboradores = render_colaboradores
