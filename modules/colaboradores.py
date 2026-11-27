@@ -442,4 +442,3 @@ def render_colaboradores() -> None:
 
     with tab2:
         render_formulario_colaborador(supabase, colab_editar=None, cargos=cargos)
-```[cite: 14]
