@@ -7,6 +7,7 @@ from ui_components import render_cabecalho_modulo
 
 CHAVE_MSG_COLABORADOR = "msg_feedback_colaborador"
 DATA_MINIMA_PERMITIDA = date(1990, 1, 1)
+DATA_MAXIMA_PERMITIDA = date(2099, 12, 31)
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -55,9 +56,13 @@ def _parse_data(valor) -> date | None:
     return None
 
 
-def _garantir_data_minima(dt: date | None, padrao: date) -> date:
+def _garantir_data_valida(dt: date | None, padrao: date) -> date:
     base = dt or padrao
-    return base if base >= DATA_MINIMA_PERMITIDA else DATA_MINIMA_PERMITIDA
+    if base < DATA_MINIMA_PERMITIDA:
+        return DATA_MINIMA_PERMITIDA
+    if base > DATA_MAXIMA_PERMITIDA:
+        return DATA_MAXIMA_PERMITIDA
+    return base
 
 
 def _extrair_coluna_pgrst204(msg: str) -> str | None:
@@ -166,7 +171,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
 
     val_mat = str(colab_editar.get("matricula") or "").strip().upper() if modo_edicao else ""
     val_cpf = str(colab_editar.get("cpf") or "").strip().upper() if modo_edicao else ""
-    val_dt_nasc = _garantir_data_minima(
+    val_dt_nasc = _garantir_data_valida(
         _parse_data(colab_editar.get("data_nascimento") or colab_editar.get("data_nasc")) if modo_edicao else None,
         DATA_MINIMA_PERMITIDA,
     )
@@ -194,7 +199,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
         if modo_edicao
         else ""
     )
-    val_dt_adm = _garantir_data_minima(
+    val_dt_adm = _garantir_data_valida(
         _parse_data(colab_editar.get("data_admissao") or colab_editar.get("admissao")) if modo_edicao else None,
         hoje_dt,
     )
@@ -242,6 +247,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
                 "Data de Nascimento",
                 value=val_dt_nasc,
                 min_value=DATA_MINIMA_PERMITIDA,
+                max_value=DATA_MAXIMA_PERMITIDA,
                 format="DD/MM/YYYY",
             )
 
@@ -271,6 +277,7 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, ca
                 "Data de Admissão",
                 value=val_dt_adm,
                 min_value=DATA_MINIMA_PERMITIDA,
+                max_value=DATA_MAXIMA_PERMITIDA,
                 format="DD/MM/YYYY",
             )
 
