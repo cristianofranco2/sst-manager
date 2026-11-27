@@ -1,8 +1,23 @@
+import re
 import pandas as pd
 import streamlit as st
 
 from database import get_supabase
 from ui_components import render_cabecalho_modulo
+
+
+def _para_maiusculo(texto: str | None) -> str:
+    return " ".join(str(texto or "").strip().upper().split())
+
+
+def _extrair_coluna_pgrst204(msg: str) -> str | None:
+    match = re.search(r"Could not find the '([^']+)' column", msg)
+    if match:
+        return match.group(1).strip()
+    match_alt = re.search(r"column ['\"]([^'\"]+)['\"]", msg)
+    if match_alt:
+        return match_alt.group(1).strip()
+    return None
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -22,6 +37,16 @@ def _buscar_epis() -> list[dict]:
     supabase = get_supabase()
     res = supabase.table("epis").select("*").execute()
     return res.data or []
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _buscar_uniformes() -> list[dict]:
+    supabase = get_supabase()
+    try:
+        res = supabase.table("uniformes").select("*").execute()
+        return res.data or []
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -59,6 +84,7 @@ def _buscar_requisito_funcao(funcao_id: str) -> dict | None:
 def _limpar_cache_matriz() -> None:
     _buscar_funcoes.clear()
     _buscar_epis.clear()
+    _buscar_uniformes.clear()
     _buscar_treinamentos.clear()
     _buscar_tipos_exames.clear()
     _buscar_requisito_funcao.clear()
@@ -71,17 +97,36 @@ def _garantir_estado_matriz() -> dict:
             "carregado_para_funcao": None,
             "epi_ids": [],
             "epi_quantidades": {},
+            "uniforme_ids": [],
+            "uniforme_quantidades": {},
             "treinamento_ids": [],
             "exame_ids": [],
         }
-    elif "epi_quantidades" not in st.session_state["matriz_state"]:
-        st.session_state["matriz_state"]["epi_quantidades"] = {}
+    else:
+        st.session_state["matriz_state"].setdefault("epi_quantidades", {})
+        st.session_state["matriz_state"].setdefault("uniforme_ids", [])
+        st.session_state["matriz_state"].setdefault("uniforme_quantidades", {})
     return st.session_state["matriz_state"]
 
 
 def _ir_para_modulo(destino_menu: str) -> None:
     st.session_state["origem_matriz"] = True
     st.session_state["menu_pendente"] = destino_menu
+
+
+def _salvar_requisito_com_fallback(supabase, payload: dict) -> None:
+    dados = dict(payload)
+    for _ in range(15):
+        try:
+            supabase.table("funcao_requisitos").upsert(dados, on_conflict="funcao_id").execute()
+            return
+        except Exception as e:
+            col = _extrair_coluna_pgrst204(str(e))
+            if col and col in dados and col != "funcao_id":
+                dados.pop(col)
+                continue
+            raise
+    supabase.table("funcao_requisitos").upsert(dados, on_conflict="funcao_id").execute()
 
 
 def render_voltar_matriz_se_necessario() -> None:
@@ -101,7 +146,7 @@ def render_voltar_matriz_se_necessario() -> None:
 
 
 def render_matriz_funcao() -> None:
-    render_cabecalho_modulo("🧩 Agrupamento por Cargo (EPIs, Treinamentos e Exames)")
+    render_cabecalho_modulo("🧩 Agrupamento por Cargo (EPIs, Uniformes, Treinamentos e Exames)")
 
     try:
         supabase = get_supabase()
@@ -132,9 +177,9 @@ def render_matriz_funcao() -> None:
 
     def _format_funcao(fid: str) -> str:
         item = mapa_funcoes[fid]
-        nome = str(item.get("nome_funcao") or "Sem nome").strip()
-        cbo = str(item.get("cbo") or "").strip()
-        setor = str(item.get("setor_padrao") or "").strip()
+        nome = _para_maiusculo(item.get("nome_funcao")) or "SEM NOME"
+        cbo = _para_maiusculo(item.get("cbo"))
+        setor = _para_maiusculo(item.get("setor_padrao"))
         extra = [p for p in [f"CBO {cbo}" if cbo else "", setor] if p]
         return f"{nome} ({' • '.join(extra)})" if extra else nome
 
@@ -155,16 +200,24 @@ def render_matriz_funcao() -> None:
             state["epi_quantidades"] = {
                 str(k): max(1, int(v)) for k, v in qtd_raw.items() if v is not None
             }
+            state["uniforme_ids"] = [str(x) for x in (registro_salvo.get("uniforme_ids") or [])]
+            uni_qtd_raw = registro_salvo.get("uniforme_quantidades") or {}
+            state["uniforme_quantidades"] = {
+                str(k): max(1, int(v)) for k, v in uni_qtd_raw.items() if v is not None
+            }
             state["treinamento_ids"] = [str(x) for x in (registro_salvo.get("treinamento_ids") or [])]
             state["exame_ids"] = [str(x) for x in (registro_salvo.get("exame_ids") or [])]
         else:
             state["epi_ids"] = []
             state["epi_quantidades"] = {}
+            state["uniforme_ids"] = []
+            state["uniforme_quantidades"] = {}
             state["treinamento_ids"] = []
             state["exame_ids"] = []
         state["carregado_para_funcao"] = funcao_selecionada
 
     epis = _buscar_epis()
+    uniformes = _buscar_uniformes()
     treinamentos = _buscar_treinamentos()
     exames = _buscar_tipos_exames()
 
@@ -189,9 +242,9 @@ def render_matriz_funcao() -> None:
                 eid = str(epi.get("id", "")).strip()
                 if not eid:
                     continue
-                nome_epi = str(epi.get("descricao") or epi.get("nome_epi") or "EPI sem descrição").strip()
-                ca = str(epi.get("numero_ca") or epi.get("ca") or "").strip()
-                sku = str(epi.get("codigo_sku") or "").strip()
+                nome_epi = _para_maiusculo(epi.get("descricao") or epi.get("nome_epi")) or "EPI SEM DESCRIÇÃO"
+                ca = _para_maiusculo(epi.get("numero_ca") or epi.get("ca"))
+                sku = _para_maiusculo(epi.get("codigo_sku"))
                 detalhes = [p for p in [f"SKU {sku}" if sku else "", f"CA {ca}" if ca else ""] if p]
                 label_epi = f"{nome_epi} — {' | '.join(detalhes)}" if detalhes else nome_epi
 
@@ -228,9 +281,69 @@ def render_matriz_funcao() -> None:
 
     st.markdown("---")
 
+    bu_esq, bu_dir = st.columns([4, 1])
+    with bu_esq:
+        st.subheader("👕 3. Uniformes do Cargo e Quantidade")
+    with bu_dir:
+        if st.button("➕ Cadastrar Uniforme", key="btn_add_uni_matriz", use_container_width=True):
+            _ir_para_modulo("👕 Cadastro de Uniformes")
+            st.rerun()
+
+    uni_ids_selecionados = set(state.get("uniforme_ids") or [])
+    uni_qtds_atuais = dict(state.get("uniforme_quantidades") or {})
+    novos_uni_ids: list[str] = []
+    novas_uni_qtds: dict[str, int] = {}
+
+    if uniformes:
+        with st.container(border=True):
+            for uni in uniformes:
+                uid = str(uni.get("id", "")).strip()
+                if not uid:
+                    continue
+                nome_uni = _para_maiusculo(uni.get("nome") or uni.get("descricao")) or "UNIFORME SEM NOME"
+                tipo_u = _para_maiusculo(uni.get("tipo"))
+                tam_u = _para_maiusculo(uni.get("tamanho"))
+                cor_u = _para_maiusculo(uni.get("cor"))
+                setor_u = _para_maiusculo(uni.get("setor"))
+                detalhes_u = [p for p in [tipo_u, f"TAM {tam_u}" if tam_u else "", cor_u, setor_u] if p]
+                label_uni = f"{nome_uni} — {' | '.join(detalhes_u)}" if detalhes_u else nome_uni
+
+                col_chk_u, col_qtd_u = st.columns([4, 1])
+                with col_chk_u:
+                    marcado_u = st.checkbox(
+                        label_uni,
+                        value=uid in uni_ids_selecionados,
+                        key=f"chk_uni_{funcao_selecionada}_{uid}",
+                    )
+                with col_qtd_u:
+                    if marcado_u:
+                        qtd_padrao_u = max(1, int(uni_qtds_atuais.get(uid, 1)))
+                        qtd_val_u = st.number_input(
+                            "Qtd.",
+                            min_value=1,
+                            max_value=999,
+                            value=qtd_padrao_u,
+                            step=1,
+                            label_visibility="collapsed",
+                            key=f"qtd_uni_{funcao_selecionada}_{uid}",
+                        )
+                    else:
+                        qtd_val_u = max(1, int(uni_qtds_atuais.get(uid, 1)))
+
+                if marcado_u:
+                    novos_uni_ids.append(uid)
+                    novas_uni_qtds[uid] = int(qtd_val_u)
+    else:
+        st.info("Nenhum uniforme cadastrado ainda. Use o botão **➕ Cadastrar Uniforme** ao lado para cadastrar.")
+
+    state["uniforme_ids"] = novos_uni_ids
+    state["uniforme_quantidades"] = novas_uni_qtds
+
+    st.markdown("---")
+
     b2_esq, b2_dir = st.columns([4, 1])
     with b2_esq:
-        st.subheader("🎓 3. Treinamentos do Cargo")
+        st.subheader("🎓 4. Treinamentos do Cargo")
     with b2_dir:
         if st.button("➕ Cadastrar Treinamento", key="btn_add_trein_matriz", use_container_width=True):
             _ir_para_modulo("🎓 Cadastro de Treinamentos")
@@ -245,10 +358,10 @@ def render_matriz_funcao() -> None:
                 tid = str(tr.get("id", "")).strip()
                 if not tid:
                     continue
-                nome_tr = str(tr.get("tipo_treinamento") or "Treinamento").strip()
-                cap = str(tr.get("tipo_capacitacao") or "").strip()
+                nome_tr = _para_maiusculo(tr.get("tipo_treinamento") or tr.get("nome")) or "TREINAMENTO"
+                cap = _para_maiusculo(tr.get("tipo_capacitacao"))
                 ch = tr.get("carga_horaria")
-                detalhes = [p for p in [cap, f"{ch}h" if ch else ""] if p]
+                detalhes = [p for p in [cap, f"{ch}H" if ch else ""] if p]
                 label_tr = f"{nome_tr} — {' | '.join(detalhes)}" if detalhes else nome_tr
 
                 marcado = st.checkbox(
@@ -267,7 +380,7 @@ def render_matriz_funcao() -> None:
 
     b3_esq, b3_dir = st.columns([4, 1])
     with b3_esq:
-        st.subheader("📋 4. Exames do Cargo")
+        st.subheader("📋 5. Exames do Cargo")
     with b3_dir:
         if st.button("➕ Cadastrar Exame", key="btn_add_exame_matriz", use_container_width=True):
             _ir_para_modulo("📋 Cadastro de Exames")
@@ -282,10 +395,10 @@ def render_matriz_funcao() -> None:
                 ex_id = str(ex.get("id", "")).strip()
                 if not ex_id:
                     continue
-                nome_ex = str(ex.get("nome_exame") or "Exame").strip()
-                tuss = str(ex.get("codigo_tuss") or "").strip()
+                nome_ex = _para_maiusculo(ex.get("nome_exame") or ex.get("nome")) or "EXAME"
+                tuss = _para_maiusculo(ex.get("codigo_tuss"))
                 meses = ex.get("validade_meses")
-                detalhes = [p for p in [f"TUSS {tuss}" if tuss else "", f"Validade {meses}m" if meses else ""] if p]
+                detalhes = [p for p in [f"TUSS {tuss}" if tuss else "", f"VALIDADE {meses}M" if meses else ""] if p]
                 label_ex = f"{nome_ex} — {' | '.join(detalhes)}" if detalhes else nome_ex
 
                 marcado = st.checkbox(
@@ -303,10 +416,11 @@ def render_matriz_funcao() -> None:
     st.markdown("---")
 
     st.subheader("💾 Salvar Agrupamento do Cargo")
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("EPIs Selecionados", len(state["epi_ids"]))
-    m2.metric("Treinamentos Selecionados", len(state["treinamento_ids"]))
-    m3.metric("Exames Selecionados", len(state["exame_ids"]))
+    m2.metric("Uniformes Selecionados", len(state["uniforme_ids"]))
+    m3.metric("Treinamentos Selecionados", len(state["treinamento_ids"]))
+    m4.metric("Exames Selecionados", len(state["exame_ids"]))
 
     if st.button("💾 Salvar Requisitos do Cargo", type="primary", key="btn_salvar_matriz"):
         try:
@@ -314,10 +428,12 @@ def render_matriz_funcao() -> None:
                 "funcao_id": funcao_selecionada,
                 "epi_ids": state["epi_ids"],
                 "epi_quantidades": state["epi_quantidades"],
+                "uniforme_ids": state["uniforme_ids"],
+                "uniforme_quantidades": state["uniforme_quantidades"],
                 "treinamento_ids": state["treinamento_ids"],
                 "exame_ids": state["exame_ids"],
             }
-            supabase.table("funcao_requisitos").upsert(payload, on_conflict="funcao_id").execute()
+            _salvar_requisito_com_fallback(supabase, payload)
             _buscar_requisito_funcao.clear()
             st.success("Requisitos do cargo salvos com sucesso!")
         except Exception as e:
@@ -326,21 +442,27 @@ def render_matriz_funcao() -> None:
     requisitos_salvos = _buscar_requisito_funcao(funcao_selecionada)
     if requisitos_salvos:
         mapa_epis = {
-            str(e["id"]): str(e.get("descricao") or e.get("nome_epi") or e["id"])
+            str(e["id"]): _para_maiusculo(e.get("descricao") or e.get("nome_epi")) or str(e["id"])
             for e in epis
             if e.get("id")
         }
+        mapa_uniformes = {
+            str(u["id"]): _para_maiusculo(u.get("nome") or u.get("descricao")) or str(u["id"])
+            for u in uniformes
+            if u.get("id")
+        }
         mapa_trein = {
-            str(t["id"]): str(t.get("tipo_treinamento") or t["id"])
+            str(t["id"]): _para_maiusculo(t.get("tipo_treinamento") or t.get("nome")) or str(t["id"])
             for t in treinamentos
             if t.get("id")
         }
         mapa_exames = {
-            str(x["id"]): str(x.get("nome_exame") or x["id"])
+            str(x["id"]): _para_maiusculo(x.get("nome_exame") or x.get("nome")) or str(x["id"])
             for x in exames
             if x.get("id")
         }
         qtds_salvas = requisitos_salvos.get("epi_quantidades") or {}
+        uni_qtds_salvas = requisitos_salvos.get("uniforme_quantidades") or {}
 
         resumo_linhas = []
         for eid in requisitos_salvos.get("epi_ids") or []:
@@ -350,17 +472,24 @@ def render_matriz_funcao() -> None:
                 "Item": mapa_epis.get(eid_str, eid_str),
                 "Quantidade": qtds_salvas.get(eid_str, 1),
             })
+        for uid in requisitos_salvos.get("uniforme_ids") or []:
+            uid_str = str(uid)
+            resumo_linhas.append({
+                "Categoria": "UNIFORME",
+                "Item": mapa_uniformes.get(uid_str, uid_str),
+                "Quantidade": uni_qtds_salvas.get(uid_str, 1),
+            })
         for tid in requisitos_salvos.get("treinamento_ids") or []:
             tid_str = str(tid)
             resumo_linhas.append({
-                "Categoria": "Treinamento",
+                "Categoria": "TREINAMENTO",
                 "Item": mapa_trein.get(tid_str, tid_str),
                 "Quantidade": "-",
             })
         for xid in requisitos_salvos.get("exame_ids") or []:
             xid_str = str(xid)
             resumo_linhas.append({
-                "Categoria": "Exame",
+                "Categoria": "EXAME",
                 "Item": mapa_exames.get(xid_str, xid_str),
                 "Quantidade": "-",
             })
