@@ -6,7 +6,7 @@ from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
 CHAVE_MSG_COLABORADOR = "msg_feedback_colaborador"
-DATA_MINIMA_PERMITIDA = date(1990, 1, 1)
+DATA_MINIMA_PERMITIDA = date(1930, 1, 1)
 DATA_MAXIMA_PERMITIDA = date(2099, 12, 31)
 
 
