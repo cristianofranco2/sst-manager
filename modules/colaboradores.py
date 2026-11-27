@@ -180,30 +180,6 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
     )
     st.subheader(titulo_form)
 
-    if opcoes_funcoes:
-        funcao_sel_id = st.selectbox(
-            "Cargo / Função *",
-            options=[o[0] for o in opcoes_funcoes],
-            index=idx_funcao_padrao,
-            format_func=lambda fid: next(
-                (f"{o[1]} (CBO {o[2]})" if o[2] else o[1] for o in opcoes_funcoes if o[0] == fid),
-                fid,
-            ),
-            key=f"sel_funcao_colab_{sufixo_key}",
-        )
-        sel_funcao = next((o for o in opcoes_funcoes if o[0] == funcao_sel_id), ("", "", ""))
-        nome_funcao_sel = sel_funcao[1]
-        cbo_da_funcao = sel_funcao[2]
-    else:
-        funcao_sel_id = None
-        nome_funcao_sel = (
-            str(colab_editar.get("cargo") or colab_editar.get("funcao") or "").strip().upper()
-            if modo_edicao
-            else ""
-        )
-        cbo_da_funcao = _cbo_funcao_item(colab_editar) if modo_edicao else ""
-        st.info("Nenhuma função cadastrada em Cadastro de Cargos.")
-
     val_mat = str(colab_editar.get("matricula") or "").strip().upper() if modo_edicao else ""
     val_cpf = str(colab_editar.get("cpf") or "").strip().upper() if modo_edicao else ""
     val_dt_nasc = _garantir_data_valida(
@@ -270,16 +246,23 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
         else ""
     )
 
-    cbo_valor_padrao = cbo_da_funcao or (_cbo_funcao_item(colab_editar) if modo_edicao else "")
-    chave_cbo_dinamica = f"cbo_colab_{sufixo_key}_{funcao_sel_id or 'sem_id'}"
-
-    with st.form(f"form_colaborador_{sufixo_key}"):
+    with st.container(border=True):
         st.markdown("##### 📄 Dados Pessoais e Identificação")
         cp1, cp2, cp3 = st.columns(3)
         with cp1:
-            matricula = st.text_input("Matrícula *", value=val_mat, placeholder="EX: 123")
+            matricula = st.text_input(
+                "Matrícula *",
+                value=val_mat,
+                placeholder="EX: 123",
+                key=f"mat_{sufixo_key}",
+            )
         with cp2:
-            cpf = st.text_input("CPF * (somente números)", value=val_cpf, placeholder="EX: 00000000000")
+            cpf = st.text_input(
+                "CPF * (somente números)",
+                value=val_cpf,
+                placeholder="EX: 00000000000",
+                key=f"cpf_{sufixo_key}",
+            )
         with cp3:
             dt_nasc = st.date_input(
                 "Data de Nascimento",
@@ -287,19 +270,31 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
                 min_value=DATA_MINIMA_PERMITIDA,
                 max_value=DATA_MAXIMA_PERMITIDA,
                 format="DD/MM/YYYY",
+                key=f"dt_nasc_{sufixo_key}",
             )
 
         cp4, cp5, cp6 = st.columns(3)
         with cp4:
-            nome_completo = st.text_input("Nome Completo *", value=val_nome, placeholder="EX: DANILO SOUSA")
+            nome_completo = st.text_input(
+                "Nome Completo *",
+                value=val_nome,
+                placeholder="EX: DANILO SOUSA",
+                key=f"nome_{sufixo_key}",
+            )
         with cp5:
-            rg = st.text_input("RG", value=val_rg, placeholder="EX: 000000000")
+            rg = st.text_input(
+                "RG",
+                value=val_rg,
+                placeholder="EX: 000000000",
+                key=f"rg_{sufixo_key}",
+            )
         with cp6:
             generos = ["MASCULINO", "FEMININO", "OUTRO", "NÃO INFORMADO"]
             genero = st.selectbox(
                 "Gênero",
                 options=generos,
                 index=generos.index(val_genero) if val_genero in generos else 0,
+                key=f"genero_{sufixo_key}",
             )
 
         st.markdown("---")
@@ -307,18 +302,51 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
 
         cd1, cd2, cd3 = st.columns(3)
         with cd1:
-            st.text_input(
-                "Cargo / Função Selecionado *",
-                value=nome_funcao_sel or "—",
-                disabled=True,
+            if opcoes_funcoes:
+                funcao_sel_id = st.selectbox(
+                    "Cargo / Função *",
+                    options=[o[0] for o in opcoes_funcoes],
+                    index=idx_funcao_padrao,
+                    format_func=lambda fid: next(
+                        (f"{o[1]} (CBO {o[2]})" if o[2] else o[1] for o in opcoes_funcoes if o[0] == fid),
+                        fid,
+                    ),
+                    key=f"sel_funcao_{sufixo_key}",
+                )
+                sel_funcao = next((o for o in opcoes_funcoes if o[0] == funcao_sel_id), ("", "", ""))
+                nome_funcao_sel = sel_funcao[1]
+                cbo_da_funcao = sel_funcao[2]
+            else:
+                funcao_sel_id = None
+                nome_funcao_sel = st.text_input(
+                    "Cargo / Função *",
+                    value=(
+                        str(colab_editar.get("cargo") or colab_editar.get("funcao") or "").strip().upper()
+                        if modo_edicao
+                        else ""
+                    ),
+                    placeholder="EX: ASSISTENTE",
+                    key=f"cargo_txt_{sufixo_key}",
+                )
+                cbo_da_funcao = ""
+
+        chave_cbo_controle = f"_cbo_sync_{sufixo_key}"
+        chave_ultimo_cargo = f"_cbo_last_cargo_{sufixo_key}"
+        if st.session_state.get(chave_ultimo_cargo) != funcao_sel_id:
+            st.session_state[chave_ultimo_cargo] = funcao_sel_id
+            st.session_state[chave_cbo_controle] = (
+                cbo_da_funcao or (_cbo_funcao_item(colab_editar) if modo_edicao else "")
             )
+
         with cd2:
             cbo_livre = st.text_input(
                 "CBO (opcional)",
-                value=cbo_valor_padrao,
-                key=chave_cbo_dinamica,
-                placeholder="EX: 2458",
+                value=st.session_state.get(chave_cbo_controle, ""),
+                placeholder="EX: 7822-20",
+                key=f"cbo_input_{sufixo_key}_{funcao_sel_id or 'livre'}",
             )
+            st.session_state[chave_cbo_controle] = cbo_livre
+
         with cd3:
             dt_admissao = st.date_input(
                 "Data de Admissão",
@@ -326,21 +354,31 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
                 min_value=DATA_MINIMA_PERMITIDA,
                 max_value=DATA_MAXIMA_PERMITIDA,
                 format="DD/MM/YYYY",
+                key=f"dt_adm_{sufixo_key}",
             )
 
         cd4, cd5, cd6 = st.columns(3)
         with cd4:
             num_matricula_aloc = st.text_input(
-                "Nº da Matrícula", value=val_num_mat_aloc, placeholder="EX: MAT-998877"
+                "Nº da Matrícula",
+                value=val_num_mat_aloc,
+                placeholder="EX: MAT-998877",
+                key=f"num_mat_{sufixo_key}",
             )
         with cd5:
-            setor = st.text_input("Setor / Centro de Custo", value=val_setor, placeholder="EX: OPERAÇÃO")
+            setor = st.text_input(
+                "Setor / Centro de Custo",
+                value=val_setor,
+                placeholder="EX: OPERAÇÃO",
+                key=f"setor_{sufixo_key}",
+            )
         with cd6:
             contratos = ["CLT", "PJ", "ESTÁGIO", "TEMPORÁRIO", "TERCEIRIZADO"]
             tipo_contrato = st.selectbox(
                 "Tipo de Contrato",
                 options=contratos,
                 index=contratos.index(val_contrato) if val_contrato in contratos else 0,
+                key=f"contrato_{sufixo_key}",
             )
 
         cd7, cd8 = st.columns(2)
@@ -350,28 +388,40 @@ def render_formulario_colaborador(supabase, colab_editar: dict | None = None, fu
                 "Status Inicial",
                 options=statuses,
                 index=statuses.index(val_status) if val_status in statuses else 0,
+                key=f"status_{sufixo_key}",
             )
         with cd8:
             gestor_direto = st.text_input(
                 "Gestor Direto / Superior Imediato",
                 value=val_gestor,
                 placeholder="EX: CARLOS ALBERTO",
+                key=f"gestor_{sufixo_key}",
             )
 
         st.markdown("---")
         st.markdown("##### 📞 Contato e Comunicação")
         cc1, cc2 = st.columns(2)
         with cc1:
-            email = st.text_input("E-mail", value=val_email, placeholder="COLABORADOR@GLOBEXMULTIMODAL.COM.BR")
+            email = st.text_input(
+                "E-mail",
+                value=val_email,
+                placeholder="COLABORADOR@GLOBEXMULTIMODAL.COM.BR",
+                key=f"email_{sufixo_key}",
+            )
         with cc2:
-            telefone = st.text_input("Telefone / WhatsApp", value=val_tel, placeholder="(19) 99999-9999")
+            telefone = st.text_input(
+                "Telefone / WhatsApp",
+                value=val_tel,
+                placeholder="(19) 99999-9999",
+                key=f"tel_{sufixo_key}",
+            )
 
         btn_rotulo = "💾 Salvar Alterações" if modo_edicao else "💾 Cadastrar Colaborador"
-        if st.form_submit_button(btn_rotulo):
+        if st.button(btn_rotulo, key=f"btn_salvar_colab_{sufixo_key}", type="primary"):
             mat_aloc_limpa = num_matricula_aloc.strip().upper()
             mat_limpa = (matricula.strip() or mat_aloc_limpa).upper()
             nome_limpo = " ".join(nome_completo.strip().upper().split())
-            funcao_limpa = " ".join(nome_funcao_sel.strip().upper().split())
+            funcao_limpa = " ".join(str(nome_funcao_sel or "").strip().upper().split())
             cbo_limpo = _cbo_funcao_item({"cbo": cbo_livre})
 
             if not mat_limpa or not nome_limpo:
