@@ -3,6 +3,8 @@ import streamlit as st
 from database import get_supabase
 from ui_components import render_cabecalho_modulo
 
+COLUNAS_OCULTAS_TABELA = {"id", "created_at", "updated_at", "deleted_at"}
+
 
 def _para_maiusculo(valor):
     if isinstance(valor, str):
@@ -38,6 +40,20 @@ def _executar_insert_maiusculo(supabase, tabela: str, payload: dict, obrigatoria
     return supabase.table(tabela).insert(dados).execute()
 
 
+def _filtrar_colunas_exibicao(registros: list[dict]) -> list[dict]:
+    filtrados: list[dict] = []
+    for reg in registros:
+        if not isinstance(reg, dict):
+            continue
+        item = {
+            k: v
+            for k, v in reg.items()
+            if str(k).strip().lower() not in COLUNAS_OCULTAS_TABELA
+        }
+        filtrados.append(item)
+    return filtrados
+
+
 def render_tipos_exames() -> None:
     render_cabecalho_modulo("📋 Cadastro de Exames")
     supabase = get_supabase()
@@ -51,7 +67,7 @@ def render_tipos_exames() -> None:
             st.rerun()
 
         res = supabase.table("tipos_exames").select("*").execute()
-        dados = res.data or []
+        dados = _filtrar_colunas_exibicao(res.data or [])
         if dados:
             st.dataframe(dados, use_container_width=True, hide_index=True)
         else:
