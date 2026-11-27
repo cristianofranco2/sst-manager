@@ -436,64 +436,70 @@ def render_matriz_funcao() -> None:
             _salvar_requisito_com_fallback(supabase, payload)
             _buscar_requisito_funcao.clear()
             st.success("Requisitos do cargo salvos com sucesso!")
+            st.rerun()
         except Exception as e:
             st.error(f"Erro ao salvar agrupamento do cargo: {e}")
 
-    requisitos_salvos = _buscar_requisito_funcao(funcao_selecionada)
-    if requisitos_salvos:
-        mapa_epis = {
-            str(e["id"]): _para_maiusculo(e.get("descricao") or e.get("nome_epi")) or str(e["id"])
-            for e in epis
-            if e.get("id")
-        }
-        mapa_uniformes = {
-            str(u["id"]): _para_maiusculo(u.get("nome") or u.get("descricao")) or str(u["id"])
-            for u in uniformes
-            if u.get("id")
-        }
-        mapa_trein = {
-            str(t["id"]): _para_maiusculo(t.get("tipo_treinamento") or t.get("nome")) or str(t["id"])
-            for t in treinamentos
-            if t.get("id")
-        }
-        mapa_exames = {
-            str(x["id"]): _para_maiusculo(x.get("nome_exame") or x.get("nome")) or str(x["id"])
-            for x in exames
-            if x.get("id")
-        }
-        qtds_salvas = requisitos_salvos.get("epi_quantidades") or {}
-        uni_qtds_salvas = requisitos_salvos.get("uniforme_quantidades") or {}
+    requisitos_salvos = _buscar_requisito_funcao(funcao_selecionada) or {}
+    mapa_epis = {
+        str(e["id"]): _para_maiusculo(e.get("descricao") or e.get("nome_epi")) or str(e["id"])
+        for e in epis
+        if e.get("id")
+    }
+    mapa_uniformes = {
+        str(u["id"]): _para_maiusculo(u.get("nome") or u.get("descricao")) or str(u["id"])
+        for u in uniformes
+        if u.get("id")
+    }
+    mapa_trein = {
+        str(t["id"]): _para_maiusculo(t.get("tipo_treinamento") or t.get("nome")) or str(t["id"])
+        for t in treinamentos
+        if t.get("id")
+    }
+    mapa_exames = {
+        str(x["id"]): _para_maiusculo(x.get("nome_exame") or x.get("nome")) or str(x["id"])
+        for x in exames
+        if x.get("id")
+    }
 
-        resumo_linhas = []
-        for eid in requisitos_salvos.get("epi_ids") or []:
-            eid_str = str(eid)
-            resumo_linhas.append({
-                "Categoria": "EPI",
-                "Item": mapa_epis.get(eid_str, eid_str),
-                "Quantidade": qtds_salvas.get(eid_str, 1),
-            })
-        for uid in requisitos_salvos.get("uniforme_ids") or []:
-            uid_str = str(uid)
-            resumo_linhas.append({
-                "Categoria": "UNIFORME",
-                "Item": mapa_uniformes.get(uid_str, uid_str),
-                "Quantidade": uni_qtds_salvas.get(uid_str, 1),
-            })
-        for tid in requisitos_salvos.get("treinamento_ids") or []:
-            tid_str = str(tid)
-            resumo_linhas.append({
-                "Categoria": "TREINAMENTO",
-                "Item": mapa_trein.get(tid_str, tid_str),
-                "Quantidade": "-",
-            })
-        for xid in requisitos_salvos.get("exame_ids") or []:
-            xid_str = str(xid)
-            resumo_linhas.append({
-                "Categoria": "EXAME",
-                "Item": mapa_exames.get(xid_str, xid_str),
-                "Quantidade": "-",
-            })
+    lista_epi_ids = requisitos_salvos.get("epi_ids") or state.get("epi_ids") or []
+    lista_uni_ids = requisitos_salvos.get("uniforme_ids") or state.get("uniforme_ids") or []
+    lista_trein_ids = requisitos_salvos.get("treinamento_ids") or state.get("treinamento_ids") or []
+    lista_exame_ids = requisitos_salvos.get("exame_ids") or state.get("exame_ids") or []
 
-        if resumo_linhas:
-            st.markdown("##### Itens Atualmente Vinculados a Este Cargo no Banco")
-            st.dataframe(pd.DataFrame(resumo_linhas), use_container_width=True, hide_index=True)
+    qtds_salvas = requisitos_salvos.get("epi_quantidades") or state.get("epi_quantidades") or {}
+    uni_qtds_salvas = requisitos_salvos.get("uniforme_quantidades") or state.get("uniforme_quantidades") or {}
+
+    resumo_linhas = []
+    for eid in lista_epi_ids:
+        eid_str = str(eid)
+        resumo_linhas.append({
+            "Categoria": "EPI",
+            "Item": mapa_epis.get(eid_str, eid_str),
+            "Quantidade": qtds_salvas.get(eid_str, 1),
+        })
+    for uid in lista_uni_ids:
+        uid_str = str(uid)
+        resumo_linhas.append({
+            "Categoria": "UNIFORME",
+            "Item": mapa_uniformes.get(uid_str, uid_str),
+            "Quantidade": uni_qtds_salvas.get(uid_str, 1),
+        })
+    for tid in lista_trein_ids:
+        tid_str = str(tid)
+        resumo_linhas.append({
+            "Categoria": "TREINAMENTO",
+            "Item": mapa_trein.get(tid_str, tid_str),
+            "Quantidade": "-",
+        })
+    for xid in lista_exame_ids:
+        xid_str = str(xid)
+        resumo_linhas.append({
+            "Categoria": "EXAME",
+            "Item": mapa_exames.get(xid_str, xid_str),
+            "Quantidade": "-",
+        })
+
+    if resumo_linhas:
+        st.markdown("##### Itens Atualmente Vinculados a Este Cargo no Banco")
+        st.dataframe(pd.DataFrame(resumo_linhas), use_container_width=True, hide_index=True)
